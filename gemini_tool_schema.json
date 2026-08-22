@@ -1,0 +1,51 @@
+{
+  "function_declarations": [
+    {
+      "name": "create_todoist_tasks",
+      "description": "Batch create tasks in Todoist categorized under appropriate projects with priorities and due dates.",
+      "parameters": {
+        "type": "OBJECT",
+        "properties": {
+          "tasks": {
+            "type": "ARRAY",
+            "description": "A list of tasks to create in Todoist.",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "content": {
+                  "type": "STRING",
+                  "description": "The title or main content of the task."
+                },
+                "project_name": {
+                  "type": "STRING",
+                  "description": "Target Todoist project name (e.g. 'Odak & Gelişim', 'Inbox', 'Work'). Defaults to 'Odak & Gelişim' if omitted."
+                },
+                "due_string": {
+                  "type": "STRING",
+                  "description": "Natural language due date/time expression (e.g. 'today', 'tomorrow at 15:00', 'every monday at 09:00', 'in 2 days')."
+                },
+                "priority": {
+                  "type": "INTEGER",
+                  "description": "Priority level of the task from 1 (normal/p4) to 4 (urgent/p1). Default is 1.",
+                  "minimum": 1,
+                  "maximum": 4,
+                  "default": 1
+                },
+                "description": {
+                  "type": "STRING",
+                  "description": "Detailed description, notes, checklist, or markdown context for the task."
+                }
+              },
+              "required": [
+                "content"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tasks"
+        ]
+      }
+    }
+  ]
+}
