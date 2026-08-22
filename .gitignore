@@ -1,16 +1,41 @@
-# Çevre değişkenleri (API anahtarları)
+# Çevre değişkenleri ve Gizli Anahtarlar (API Tokens)
 .env
 *.env
+.env.*
+!.env.example
 
-# Kişisel / yerel görev dosyaları
+# Google OAuth kimlik, oturum ve token dosyaları
+credentials.json
+credentials*.json
+client_secret*.json
+client_secrets.json
+token.json
+token*.json
+*.token
+*.pickle
+
+# Kişisel / Yerel görev ve veri dosyaları
 tasks.json
+debug_tasks.py
+debug_*.py
+scratch/
+*.log
 
-# Python ortamı ve cache
+# Python ortamı, bytecode ve cache
 venv/
 .venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
 
-# IDE ayarları
+# IDE, Editör ve İşletim Sistemi dosyaları
 .vscode/
 .idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import requests
 from config import settings
 
@@ -110,39 +110,89 @@ class TodoistClient:
             logger.error("Network error while fetching projects: %s", e)
             raise TodoistAPIError(f"Network error while connecting to Todoist API: {e}") from e
 
+    def resolve_project_name(self, project_name: str) -> Optional[str]:
+        """
+        Resolves a project name to its Todoist project ID (case-insensitive).
+        """
+        if not project_name:
+            return None
+        try:
+            projects = self.get_projects()
+            norm = project_name.strip().lower()
+            for p in projects:
+                if p.get("name", "").strip().lower() == norm:
+                    return str(p.get("id"))
+        except Exception as e:
+            logger.warning("Error resolving project name '%s': %s", project_name, e)
+        return None
+
     def create_task(
         self,
-        content: str,
+        content: Optional[Union[str, Any]] = None,
         project_id: Optional[str] = None,
         due_string: Optional[str] = None,
         priority: int = 1,
-        description: str = "",
+        description: Optional[str] = None,
+        project_name: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Creates a new task in Todoist.
+        Supports both keyword arguments and passing a TaskPayload / dict object directly as first argument.
 
         Args:
-            content: The text content/title of the task.
-            project_id: Optional ID of the project to place the task into.
-            due_string: Optional natural language due date string (e.g. 'tomorrow at 12:00', 'every Monday').
+            content: Task title string, or a TaskPayload / dict instance.
+            project_id: Optional Todoist project ID.
+            due_string: Optional natural language due date.
             priority: Task priority from 1 (normal) to 4 (urgent).
-            description: Optional detailed description for the task.
+            description: Optional detailed description.
+            project_name: Optional project name (automatically resolved if project_id is not set).
 
         Returns:
             Dict[str, Any]: The created task object.
         """
+        # Case 1: First argument is a Pydantic model or dict object
+        if content is not None and not isinstance(content, str):
+            task_obj = content
+            if hasattr(task_obj, "model_dump"):
+                data = task_obj.model_dump(exclude_none=True)
+            elif hasattr(task_obj, "dict"):
+                data = task_obj.dict(exclude_none=True)
+            elif isinstance(task_obj, dict):
+                data = task_obj
+            else:
+                data = getattr(task_obj, "__dict__", {})
+
+            task_content = data.get("content", "")
+            task_project_id = data.get("project_id") or project_id
+            task_project_name = data.get("project_name") or project_name
+            task_due_string = data.get("due_string") or due_string
+            task_priority = data.get("priority", priority)
+            task_description = data.get("description") or description or ""
+        else:
+            task_content = str(content or kwargs.get("content", ""))
+            task_project_id = project_id or kwargs.get("project_id")
+            task_project_name = project_name or kwargs.get("project_name")
+            task_due_string = due_string or kwargs.get("due_string")
+            task_priority = priority if priority is not None else kwargs.get("priority", 1)
+            task_description = description or kwargs.get("description", "")
+
+        # If project_name is supplied without project_id, attempt to resolve it
+        if not task_project_id and task_project_name:
+            task_project_id = self.resolve_project_name(task_project_name)
+
         url = f"{self.BASE_URL}/tasks"
         payload: Dict[str, Any] = {
-            "content": content,
-            "priority": priority,
+            "content": task_content,
+            "priority": task_priority,
         }
 
-        if project_id:
-            payload["project_id"] = project_id
-        if due_string:
-            payload["due_string"] = due_string
-        if description:
-            payload["description"] = description
+        if task_project_id:
+            payload["project_id"] = task_project_id
+        if task_due_string:
+            payload["due_string"] = task_due_string
+        if task_description:
+            payload["description"] = task_description
 
         logger.debug("Creating task at %s with payload: %s", url, payload)
 
@@ -152,6 +202,93 @@ class TodoistClient:
         except requests.RequestException as e:
             logger.error("Network error while creating task: %s", e)
             raise TodoistAPIError(f"Network error while connecting to Todoist API: {e}") from e
+
+    def create_tasks_batch(
+        self,
+        tasks: List[Any],
+        project_map: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Batch creates multiple tasks in Todoist, automatically resolving project names.
+
+        Args:
+            tasks: List of TaskPayload objects or dictionaries.
+            project_map: Optional dictionary of {lowercase_project_name: project_id}.
+
+        Returns:
+            Dict[str, Any]: Summary dictionary containing 'created' and 'failed' task lists.
+        """
+        if project_map is None:
+            try:
+                raw_projects = self.get_projects()
+                project_map = {
+                    p.get("name", "").strip().lower(): str(p.get("id"))
+                    for p in raw_projects
+                    if p.get("name")
+                }
+            except Exception as e:
+                logger.warning("Failed to fetch project map in create_tasks_batch: %s", e)
+                project_map = {}
+
+        created_tasks = []
+        failed_tasks = []
+
+        for task in tasks:
+            if hasattr(task, "model_dump"):
+                task_data = task.model_dump()
+            elif isinstance(task, dict):
+                task_data = task
+            else:
+                task_data = getattr(task, "__dict__", {})
+
+            content = task_data.get("content", "")
+            project_name = task_data.get("project_name")
+            due_string = task_data.get("due_string")
+            priority = task_data.get("priority", 1)
+            description = task_data.get("description") or ""
+
+            target_project_id = None
+            if project_name:
+                target_project_id = project_map.get(project_name.strip().lower())
+
+            try:
+                created = self.create_task(
+                    content=content,
+                    project_id=target_project_id,
+                    due_string=due_string,
+                    priority=priority,
+                    description=description,
+                )
+                task_id = created.get("id", "N/A")
+                task_url = created.get("url") or f"https://app.todoist.com/app/task/{task_id}"
+
+                created_tasks.append({
+                    "original_task": task,
+                    "id": task_id,
+                    "content": content,
+                    "project_name": project_name if target_project_id else "Inbox",
+                    "project_id": target_project_id,
+                    "due_string": due_string,
+                    "priority": priority,
+                    "url": task_url,
+                    "raw": created,
+                })
+            except Exception as e:
+                logger.error("Failed to create task '%s': %s", content, e)
+                failed_tasks.append({
+                    "original_task": task,
+                    "content": content,
+                    "error": str(e),
+                })
+
+        return {
+            "success": len(failed_tasks) == 0,
+            "total": len(tasks),
+            "created_count": len(created_tasks),
+            "failed_count": len(failed_tasks),
+            "created": created_tasks,
+            "failed": failed_tasks,
+        }
 
 
 if __name__ == "__main__":
@@ -166,5 +303,3 @@ if __name__ == "__main__":
     projects = client.get_projects()
     for p in projects:
         print(f"ID: {p.get('id')} | Name: {p.get('name')}")
-
-
