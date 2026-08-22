@@ -2,6 +2,9 @@
 .env
 *.env
 
+# Kişisel / yerel görev dosyaları
+tasks.json
+
 # Python ortamı ve cache
 venv/
 .venv/

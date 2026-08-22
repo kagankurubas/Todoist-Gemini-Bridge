@@ -1,15 +1,16 @@
 [
   {
-    "content": "Sabah Egzersizi Yap",
-    "project_name": "Odak & Gelişim",
-    "due_string": "tomorrow at 08:00",
-    "priority": 3,
-    "description": "20 dakika kardiyo ve esneme"
+    "content": "Read 10 pages of book",
+    "project_name": "Focus & Growth",
+    "due_string": "today",
+    "priority": 2,
+    "description": "Daily reading habit goal"
   },
   {
-    "content": "Haftalık Bülteni Oku",
-    "project_name": "Odak & Gelişim",
-    "due_string": "Friday at 17:00",
-    "priority": 2
+    "content": "Review pull requests",
+    "project_name": "Inbox",
+    "due_string": "tomorrow",
+    "priority": 3,
+    "description": "Check open PRs on GitHub"
   }
 ]
