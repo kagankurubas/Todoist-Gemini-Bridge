@@ -65,8 +65,10 @@ cp .env.example .env
 Inside `.env`:
 ```env
 TODOIST_API_TOKEN=your_todoist_api_token_here
+WEBHOOK_SECRET_TOKEN=supersecret
 ```
 > **Tip:** You can obtain your personal API token from [Todoist Settings > Developer](https://todoist.com/app/settings/integrations/developer).
+> **Security:** When calling the FastAPI `/tasks` or `/projects` webhook endpoints, supply the header `X-Bridge-Token: <WEBHOOK_SECRET_TOKEN>`.
 
 ### 🛠️ Usage
 
@@ -147,8 +149,10 @@ cp .env.example .env
 `.env` dosyasının içeriği:
 ```env
 TODOIST_API_TOKEN=your_todoist_api_token_here
+WEBHOOK_SECRET_TOKEN=supersecret
 ```
 > **İpucu:** Kişisel API tokenınızı [Todoist Ayarlar > Geliştirici](https://todoist.com/app/settings/integrations/developer) sayfasından edinebilirsiniz.
+> **Güvenlik:** FastAPI `/tasks` veya `/projects` uç noktalarına istek atarken `X-Bridge-Token: <WEBHOOK_SECRET_TOKEN>` başlığını (header) ekleyiniz.
 
 ### 🛠️ Kullanım
 

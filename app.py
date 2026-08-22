@@ -1,8 +1,10 @@
 import logging
-from typing import Any, Dict, List, Union
-from fastapi import Body, FastAPI, HTTPException, status
+from typing import Any, Dict, List, Optional, Union
+from fastapi import Body, Depends, FastAPI, HTTPException, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
+from config import settings
 from main import build_project_map, resolve_project_id
 from models import BatchTaskPayload, TaskPayload
 from todoist_client import (
@@ -31,6 +33,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security / Token authentication header
+bridge_token_header = APIKeyHeader(
+    name="X-Bridge-Token",
+    auto_error=False,
+    description="Pre-shared secret token for authenticating webhook requests.",
+)
+
+
+async def verify_bridge_token(token: Optional[str] = Security(bridge_token_header)) -> str:
+    """
+    Validates that the incoming request contains a valid X-Bridge-Token header.
+    """
+    if not token or token != settings.WEBHOOK_SECRET_TOKEN:
+        logger.warning("Unauthorized access attempt: Invalid or missing X-Bridge-Token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Bridge-Token authentication header.",
+        )
+    return token
 
 
 # Exception Handlers
@@ -72,14 +94,15 @@ async def api_exception_handler(request, exc: TodoistAPIError):
 
 @app.get("/health", tags=["Health"])
 async def health_check() -> Dict[str, str]:
-    """Health check endpoint."""
+    """Public health check endpoint."""
     return {"status": "ok"}
 
 
-@app.get("/projects", tags=["Todoist"])
+@app.get("/projects", tags=["Todoist"], dependencies=[Depends(verify_bridge_token)])
 async def get_projects() -> List[Dict[str, Any]]:
     """
     Fetches and returns all projects from the user's Todoist account.
+    Requires X-Bridge-Token header.
     """
     try:
         client = TodoistClient()
@@ -97,7 +120,7 @@ async def get_projects() -> List[Dict[str, Any]]:
         )
 
 
-@app.post("/tasks", tags=["Todoist"])
+@app.post("/tasks", tags=["Todoist"], dependencies=[Depends(verify_bridge_token)])
 async def create_tasks(
     payload: Union[BatchTaskPayload, List[TaskPayload], TaskPayload] = Body(
         ...,
@@ -106,6 +129,7 @@ async def create_tasks(
 ) -> Dict[str, Any]:
     """
     Creates one or more tasks in Todoist, automatically resolving target project names.
+    Requires X-Bridge-Token header.
     """
     # Normalize input into a List[TaskPayload]
     tasks_to_create: List[TaskPayload] = []

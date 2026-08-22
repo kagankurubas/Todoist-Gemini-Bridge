@@ -14,6 +14,10 @@ class Settings(BaseSettings):
         ...,
         description="Todoist API token for authenticating REST requests",
     )
+    WEBHOOK_SECRET_TOKEN: str = Field(
+        default="supersecret",
+        description="Secret token for authenticating incoming webhooks / API requests",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
