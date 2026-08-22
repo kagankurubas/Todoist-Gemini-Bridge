@@ -72,6 +72,50 @@ def test_parse_google_task_full_tags():
     assert payload.description == "DHT22 pinout detayları"
 
 
+def test_parse_google_task_bracket_project_stripping():
+    # Verify [Project Name] is completely stripped from content
+    title = "[Odak & Gelişim] ESP32 Devre Çizimi p1 @tomorrow at 15:30"
+    payload = parse_google_task(title)
+
+    assert payload.content == "ESP32 Devre Çizimi"
+    assert payload.project_name == "Odak & Gelişim"
+    assert payload.priority == 4
+    assert payload.due_string == "tomorrow at 15:30"
+    assert payload.due_lang == "tr"
+
+
+def test_parse_google_task_bracket_project_simple():
+    title = "[İş] Haftalık Ekip Toplantısı p2"
+    payload = parse_google_task(title)
+
+    assert payload.content == "Haftalık Ekip Toplantısı"
+    assert payload.project_name == "İş"
+    assert payload.priority == 3
+
+
+def test_parse_google_task_due_field_date_only():
+    # RFC 3339 timestamp with 00:00:00 -> due_date
+    payload = parse_google_task(
+        title="Rapor Teslimi",
+        due="2026-08-25T00:00:00.000Z",
+    )
+    assert payload.content == "Rapor Teslimi"
+    assert payload.due_date == "2026-08-25"
+    assert payload.due_datetime is None
+    assert payload.due_string is None
+
+
+def test_parse_google_task_due_field_datetime():
+    # RFC 3339 timestamp with specific time -> due_datetime
+    payload = parse_google_task(
+        title="Müşteri Görüşmesi",
+        due="2026-08-25T14:30:00.000Z",
+    )
+    assert payload.content == "Müşteri Görüşmesi"
+    assert payload.due_datetime == "2026-08-25T14:30:00.000Z"
+    assert payload.due_date is None
+
+
 def test_parse_google_task_priority_mapping():
     # p1=4, p2=3, p3=2, p4=1
     assert parse_google_task("Görev p1").priority == 4
@@ -86,6 +130,8 @@ def test_parse_google_task_defaults():
     assert payload.project_name == "Odak & Gelişim"
     assert payload.priority == 1
     assert payload.due_string is None
+    assert payload.due_date is None
+    assert payload.due_datetime is None
     assert payload.description is None
 
 

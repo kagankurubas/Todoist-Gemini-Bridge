@@ -31,20 +31,28 @@ logger = logging.getLogger("sync_worker")
 SCOPES = ["https://www.googleapis.com/auth/tasks"]
 
 
-def parse_google_task(title: str, notes: Optional[str] = None) -> TaskPayload:
+def parse_google_task(
+    title: str,
+    notes: Optional[str] = None,
+    due: Optional[str] = None,
+) -> TaskPayload:
     """
     Parses a Google Tasks title containing inline tags and metadata into a TaskPayload.
 
-    Supported tag syntax:
-      - #Project Name -> project_name
-      - p[1-4]        -> priority (p1=4, p2=3, p3=2, p4=1)
-      - @Date String  -> due_string (e.g. @today, @tomorrow at 15:00, @Monday)
-      - Remaining text -> content
-      - notes          -> description
+    Supported tag syntax in title:
+      - [Project Name] or #Project Name -> project_name (completely stripped from content)
+      - p[1-4]                         -> priority (p1=4, p2=3, p3=2, p4=1)
+      - @Date String                   -> due_string (e.g. @today, @tomorrow at 15:30, @Monday)
+      - Remaining text                 -> content (clean task title without project tags)
+      - notes                          -> description
+      - due (RFC 3339 from API)        -> due_datetime or due_date (if no @Date in title/notes)
 
     Examples:
-      "ESP32 Devre Şeması #Odak & Gelişim p1 @today"
+      "[Odak & Gelişim] ESP32 Devre Şeması p1 @today"
       -> content: "ESP32 Devre Şeması", project_name: "Odak & Gelişim", priority: 4, due_string: "today"
+
+      "[İş] Haftalık Ekip Toplantısı p2"
+      -> content: "Haftalık Ekip Toplantısı", project_name: "İş", priority: 3
     """
     raw_text = title.strip()
 
@@ -59,29 +67,60 @@ def parse_google_task(title: str, notes: Optional[str] = None) -> TaskPayload:
 
     # 2. Extract @Date String: @today, @tomorrow at 18:00, @Friday, etc.
     due_string = None
-    due_match = re.search(r"@([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_:\s]+?)(?=\s+#|\s+p[1-4]|$)", raw_text, re.IGNORECASE)
+    due_match = re.search(r"@([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_:\s]+?)(?=\s+#|\s+\[|\s+p[1-4]|$)", raw_text, re.IGNORECASE)
     if due_match:
         due_string = due_match.group(1).strip()
         raw_text = raw_text[:due_match.start()] + " " + raw_text[due_match.end():]
 
-    # 3. Extract #Project Name: #Odak & Gelişim, #Inbox, #Work, etc.
+    # 3. Extract Project Name: [Project Name] or #Project Name
     project_name = "Odak & Gelişim"
-    proj_match = re.search(r"#([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_&\s-]+?)(?=\s+@|\s+p[1-4]|$)", raw_text, re.IGNORECASE)
-    if proj_match:
-        project_name = proj_match.group(1).strip()
-        raw_text = raw_text[:proj_match.start()] + " " + raw_text[proj_match.end():]
 
-    # 4. Clean content
+    # Check bracket format: [Project Name] e.g. [Odak & Gelişim], [İş], [Inbox]
+    proj_bracket_match = re.search(r"\[([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_&\s-]+?)\]", raw_text)
+    if proj_bracket_match:
+        project_name = proj_bracket_match.group(1).strip()
+        raw_text = raw_text[:proj_bracket_match.start()] + " " + raw_text[proj_bracket_match.end():]
+    else:
+        # Check hashtag format: #Project Name e.g. #Odak & Gelişim, #İş
+        proj_hash_match = re.search(r"#([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_&\s-]+?)(?=\s+@|\s+\[|\s+p[1-4]|$)", raw_text, re.IGNORECASE)
+        if proj_hash_match:
+            project_name = proj_hash_match.group(1).strip()
+            raw_text = raw_text[:proj_hash_match.start()] + " " + raw_text[proj_hash_match.end():]
+
+    # 4. Clean content: trim and remove multiple spaces / leftover symbols
     content = " ".join(raw_text.split()).strip()
     if not content:
         content = "Untitled Task"
 
+    # 5. Extract date/time from notes (if notes has @date tag) or from Google Tasks API 'due' field
     description = notes.strip() if notes else None
+    if not due_string and description:
+        notes_due_match = re.search(r"@([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_:\s]+?)(?=\s+#|\s+\[|\s+p[1-4]|$)", description, re.IGNORECASE)
+        if notes_due_match:
+            due_string = notes_due_match.group(1).strip()
+
+    due_date = None
+    due_datetime = None
+    if not due_string and due:
+        due_str = str(due).strip()
+        if "T" in due_str:
+            date_part, time_part = due_str.split("T", 1)
+            # Google Tasks date-only usually ends with T00:00:00.000Z
+            clean_time = time_part.rstrip("Z").replace(".000", "").replace(":00", "")
+            if clean_time and clean_time != "00":
+                due_datetime = due_str
+            else:
+                due_date = date_part
+        else:
+            due_date = due_str
 
     return TaskPayload(
         content=content,
         project_name=project_name,
         due_string=due_string,
+        due_date=due_date,
+        due_datetime=due_datetime,
+        due_lang="tr",
         priority=priority,
         description=description,
     )
@@ -239,7 +278,8 @@ def sync_tasks(service, todoist_client: TodoistClient) -> int:
                     continue
 
                 notes = item.get("notes")
-                parsed_task = parse_google_task(title, notes)
+                due = item.get("due")
+                parsed_task = parse_google_task(title=title, notes=notes, due=due)
 
                 tasks_payloads.append(parsed_task)
                 task_id_map.append(item["id"])

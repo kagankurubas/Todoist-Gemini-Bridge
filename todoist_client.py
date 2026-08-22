@@ -131,6 +131,9 @@ class TodoistClient:
         content: Optional[Union[str, Any]] = None,
         project_id: Optional[str] = None,
         due_string: Optional[str] = None,
+        due_date: Optional[str] = None,
+        due_datetime: Optional[str] = None,
+        due_lang: Optional[str] = "tr",
         priority: int = 1,
         description: Optional[str] = None,
         project_name: Optional[str] = None,
@@ -138,12 +141,15 @@ class TodoistClient:
     ) -> Dict[str, Any]:
         """
         Creates a new task in Todoist.
-        Supports both keyword arguments and passing a TaskPayload / dict object directly as first argument.
+        Supports keyword arguments, direct parameters, and TaskPayload / dict instances.
 
         Args:
             content: Task title string, or a TaskPayload / dict instance.
             project_id: Optional Todoist project ID.
-            due_string: Optional natural language due date.
+            due_string: Optional natural language due date/time (e.g. 'tomorrow at 15:30').
+            due_date: Optional specific due date in YYYY-MM-DD format.
+            due_datetime: Optional specific due datetime in RFC3339 / ISO 8601 format.
+            due_lang: 2-letter language code for due_string (defaults to 'tr').
             priority: Task priority from 1 (normal) to 4 (urgent).
             description: Optional detailed description.
             project_name: Optional project name (automatically resolved if project_id is not set).
@@ -167,6 +173,9 @@ class TodoistClient:
             task_project_id = data.get("project_id") or project_id
             task_project_name = data.get("project_name") or project_name
             task_due_string = data.get("due_string") or due_string
+            task_due_date = data.get("due_date") or due_date
+            task_due_datetime = data.get("due_datetime") or due_datetime
+            task_due_lang = data.get("due_lang") or due_lang
             task_priority = data.get("priority", priority)
             task_description = data.get("description") or description or ""
         else:
@@ -174,6 +183,9 @@ class TodoistClient:
             task_project_id = project_id or kwargs.get("project_id")
             task_project_name = project_name or kwargs.get("project_name")
             task_due_string = due_string or kwargs.get("due_string")
+            task_due_date = due_date or kwargs.get("due_date")
+            task_due_datetime = due_datetime or kwargs.get("due_datetime")
+            task_due_lang = due_lang or kwargs.get("due_lang")
             task_priority = priority if priority is not None else kwargs.get("priority", 1)
             task_description = description or kwargs.get("description", "")
 
@@ -189,8 +201,17 @@ class TodoistClient:
 
         if task_project_id:
             payload["project_id"] = task_project_id
+
+        # Due Date / DateTime / Due String resolution
         if task_due_string:
             payload["due_string"] = task_due_string
+            if task_due_lang:
+                payload["due_lang"] = task_due_lang
+        elif task_due_datetime:
+            payload["due_datetime"] = task_due_datetime
+        elif task_due_date:
+            payload["due_date"] = task_due_date
+
         if task_description:
             payload["description"] = task_description
 
@@ -244,6 +265,9 @@ class TodoistClient:
             content = task_data.get("content", "")
             project_name = task_data.get("project_name")
             due_string = task_data.get("due_string")
+            due_date = task_data.get("due_date")
+            due_datetime = task_data.get("due_datetime")
+            due_lang = task_data.get("due_lang", "tr")
             priority = task_data.get("priority", 1)
             description = task_data.get("description") or ""
 
@@ -256,6 +280,9 @@ class TodoistClient:
                     content=content,
                     project_id=target_project_id,
                     due_string=due_string,
+                    due_date=due_date,
+                    due_datetime=due_datetime,
+                    due_lang=due_lang,
                     priority=priority,
                     description=description,
                 )
@@ -268,7 +295,7 @@ class TodoistClient:
                     "content": content,
                     "project_name": project_name if target_project_id else "Inbox",
                     "project_id": target_project_id,
-                    "due_string": due_string,
+                    "due_string": due_string or due_date or due_datetime,
                     "priority": priority,
                     "url": task_url,
                     "raw": created,

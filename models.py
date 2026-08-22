@@ -18,6 +18,18 @@ class TaskPayload(BaseModel):
         default=None,
         description="Natural language due date/time (e.g. 'tomorrow at 14:00', 'every Monday').",
     )
+    due_date: Optional[str] = Field(
+        default=None,
+        description="Specific due date in YYYY-MM-DD format (e.g. '2026-08-23').",
+    )
+    due_datetime: Optional[str] = Field(
+        default=None,
+        description="Specific due date and time in RFC 3339 / ISO 8601 format (e.g. '2026-08-23T15:30:00Z').",
+    )
+    due_lang: Optional[str] = Field(
+        default="tr",
+        description="2-letter language code for natural language due_string (defaults to 'tr').",
+    )
     priority: int = Field(
         default=1,
         ge=1,
