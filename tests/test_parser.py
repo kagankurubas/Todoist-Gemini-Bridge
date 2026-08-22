@@ -116,6 +116,34 @@ def test_parse_google_task_due_field_datetime():
     assert payload.due_date is None
 
 
+def test_parse_google_task_saat_in_notes():
+    # Saat: 17:00 in notes combined with due date into due_datetime
+    payload = parse_google_task(
+        title="[İş] Müşteri Sunumu p1",
+        notes="Saat: 17:00\nDetaylı slaytlar hazırlanacak",
+        due="2026-08-23T00:00:00.000Z",
+    )
+    assert payload.content == "Müşteri Sunumu"
+    assert payload.project_name == "İş"
+    assert payload.priority == 4
+    assert payload.due_datetime == "2026-08-23T17:00:00"
+    assert payload.due_date is None
+    assert payload.description == "Detaylı slaytlar hazırlanacak"
+
+
+def test_parse_google_task_standalone_time_in_notes():
+    # Standalone 14:30 in notes combined with due date into due_datetime
+    payload = parse_google_task(
+        title="Doktor Kontrolü",
+        notes="14:30\nTahlil sonuçları getirilecek",
+        due="2026-08-25T00:00:00.000Z",
+    )
+    assert payload.content == "Doktor Kontrolü"
+    assert payload.due_datetime == "2026-08-25T14:30:00"
+    assert payload.due_date is None
+    assert payload.description == "Tahlil sonuçları getirilecek"
+
+
 def test_parse_google_task_priority_mapping():
     # p1=4, p2=3, p3=2, p4=1
     assert parse_google_task("Görev p1").priority == 4

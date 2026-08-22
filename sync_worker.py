@@ -37,22 +37,23 @@ def parse_google_task(
     due: Optional[str] = None,
 ) -> TaskPayload:
     """
-    Parses a Google Tasks title containing inline tags and metadata into a TaskPayload.
+    Parses a Google Tasks title and notes containing inline tags, time indicators,
+    and metadata into a TaskPayload.
 
-    Supported tag syntax in title:
+    Supported tag syntax in title/notes:
       - [Project Name] or #Project Name -> project_name (completely stripped from content)
       - p[1-4]                         -> priority (p1=4, p2=3, p3=2, p4=1)
       - @Date String                   -> due_string (e.g. @today, @tomorrow at 15:30, @Monday)
+      - "Saat: HH:MM" or "HH:MM"       -> combined with due date into ISO due_datetime
       - Remaining text                 -> content (clean task title without project tags)
-      - notes                          -> description
-      - due (RFC 3339 from API)        -> due_datetime or due_date (if no @Date in title/notes)
+      - Cleaned notes                  -> description (time and date tags stripped)
 
     Examples:
       "[Odak & Gelişim] ESP32 Devre Şeması p1 @today"
       -> content: "ESP32 Devre Şeması", project_name: "Odak & Gelişim", priority: 4, due_string: "today"
 
-      "[İş] Haftalık Ekip Toplantısı p2"
-      -> content: "Haftalık Ekip Toplantısı", project_name: "İş", priority: 3
+      "[İş] Toplantı p2" (notes="Saat: 17:00\nMüşteri sunumu", due="2026-08-23T00:00:00.000Z")
+      -> content: "Toplantı", project_name: "İş", priority: 3, due_datetime="2026-08-23T17:00:00", description="Müşteri sunumu"
     """
     raw_text = title.strip()
 
@@ -92,20 +93,52 @@ def parse_google_task(
     if not content:
         content = "Untitled Task"
 
-    # 5. Extract date/time from notes (if notes has @date tag) or from Google Tasks API 'due' field
+    # 5. Extract time pattern (Saat: HH:MM or HH:MM) from notes or title
     description = notes.strip() if notes else None
+    extracted_time = None
+
+    if description:
+        # Priority 1: Match explicit "Saat: HH:MM" or "Saat:HH:MM"
+        time_match_explicit = re.search(r"(?i)(?:^|\n|\r|\s)*Saat:\s*(\d{1,2}:\d{2})(?:\s*|$)", description)
+        if time_match_explicit:
+            time_raw = time_match_explicit.group(1)
+            h, m = time_raw.split(":")
+            if 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
+                extracted_time = f"{int(h):02d}:{m}"
+                description = description[:time_match_explicit.start()] + "\n" + description[time_match_explicit.end():]
+                description = "\n".join([line.strip() for line in description.splitlines() if line.strip()]).strip() or None
+        else:
+            # Priority 2: Match standalone time "17:00" or "09:30"
+            time_match_standalone = re.search(r"(?i)(?:^|\n|\r|\s)*\b(\d{1,2}:\d{2})\b(?:\s*|$)", description)
+            if time_match_standalone:
+                time_raw = time_match_standalone.group(1)
+                h, m = time_raw.split(":")
+                if 0 <= int(h) <= 23 and 0 <= int(m) <= 59:
+                    extracted_time = f"{int(h):02d}:{m}"
+                    description = description[:time_match_standalone.start()] + "\n" + description[time_match_standalone.end():]
+                    description = "\n".join([line.strip() for line in description.splitlines() if line.strip()]).strip() or None
+
+    # Check notes for @Date if not found in title
     if not due_string and description:
         notes_due_match = re.search(r"@([a-zA-Z0-9çğıöşüÇĞİÖŞÜ_:\s]+?)(?=\s+#|\s+\[|\s+p[1-4]|$)", description, re.IGNORECASE)
         if notes_due_match:
             due_string = notes_due_match.group(1).strip()
+            description = description[:notes_due_match.start()] + " " + description[notes_due_match.end():]
+            description = "\n".join([line.strip() for line in description.splitlines() if line.strip()]).strip() or None
 
+    # 6. Due date and datetime resolution
     due_date = None
     due_datetime = None
-    if not due_string and due:
+
+    if due:
         due_str = str(due).strip()
-        if "T" in due_str:
-            date_part, time_part = due_str.split("T", 1)
-            # Google Tasks date-only usually ends with T00:00:00.000Z
+        date_part = due_str.split("T")[0]
+
+        if extracted_time:
+            # Combine Google Tasks date with extracted time into ISO due_datetime
+            due_datetime = f"{date_part}T{extracted_time}:00"
+        elif "T" in due_str:
+            time_part = due_str.split("T", 1)[1]
             clean_time = time_part.rstrip("Z").replace(".000", "").replace(":00", "")
             if clean_time and clean_time != "00":
                 due_datetime = due_str
@@ -113,6 +146,10 @@ def parse_google_task(
                 due_date = date_part
         else:
             due_date = due_str
+    elif extracted_time and due_string:
+        # If natural language due_string exists, append time if not already present
+        if "at" not in due_string and ":" not in due_string:
+            due_string = f"{due_string} at {extracted_time}"
 
     return TaskPayload(
         content=content,
