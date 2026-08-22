@@ -87,3 +87,39 @@ def test_parse_google_task_defaults():
     assert payload.priority == 1
     assert payload.due_string is None
     assert payload.description is None
+
+
+def test_setup_cloud_credentials(tmp_path, monkeypatch):
+    import os
+    from sync_worker import setup_cloud_credentials
+
+    token_file = str(tmp_path / "token_test.json")
+    creds_file = str(tmp_path / "creds_test.json")
+
+    monkeypatch.setenv("GOOGLE_TOKEN_JSON", '{"token": "test_token_123"}')
+    monkeypatch.setenv("GOOGLE_CREDENTIALS_JSON", '{"installed": {"client_id": "test_client"}}')
+
+    setup_cloud_credentials(credentials_path=creds_file, token_path=token_file)
+
+    assert os.path.exists(token_file)
+    assert os.path.exists(creds_file)
+
+    with open(token_file, "r", encoding="utf-8") as f:
+        assert f.read() == '{"token": "test_token_123"}'
+
+    with open(creds_file, "r", encoding="utf-8") as f:
+        assert f.read() == '{"installed": {"client_id": "test_client"}}'
+
+
+def test_main_handler_mock(monkeypatch):
+    from unittest.mock import MagicMock
+    import sync_worker
+
+    mock_run_sync = MagicMock(return_value=3)
+    monkeypatch.setattr(sync_worker, "run_sync", mock_run_sync)
+
+    result = sync_worker.main_handler()
+    assert result["statusCode"] == 200
+    assert result["status"] == "success"
+    assert result["synced_count"] == 3
+

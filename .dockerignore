@@ -1,0 +1,33 @@
+# Git & IDE
+.git
+.gitignore
+.dockerignore
+.vscode
+.idea
+
+# Python environment & cache
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets & local credentials
+.env
+*.env
+token.json
+token*.json
+credentials.json
+credentials*.json
+client_secret*.json
+
+# Local data, testing & logs
+tasks.json
+debug_tasks.py
+debug_*.py
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log

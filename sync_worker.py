@@ -87,13 +87,41 @@ def parse_google_task(title: str, notes: Optional[str] = None) -> TaskPayload:
     )
 
 
+def setup_cloud_credentials(
+    credentials_path: str = "credentials.json",
+    token_path: str = "token.json",
+) -> None:
+    """
+    Checks environment variables (GOOGLE_CREDENTIALS_JSON, GOOGLE_TOKEN_JSON)
+    and writes them to disk if present. This allows seamless serverless execution
+    in ephemeral cloud environments (Cloud Run Job, AWS Lambda, Render) without committing secrets.
+    """
+    token_env = os.environ.get("GOOGLE_TOKEN_JSON")
+    if token_env and not os.path.exists(token_path):
+        try:
+            with open(token_path, "w", encoding="utf-8") as f:
+                f.write(token_env.strip())
+            logger.info("Successfully provisioned %s from GOOGLE_TOKEN_JSON environment variable.", token_path)
+        except Exception as e:
+            logger.error("Failed to write %s from environment variable: %s", token_path, e)
+
+    creds_env = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if creds_env and not os.path.exists(credentials_path):
+        try:
+            with open(credentials_path, "w", encoding="utf-8") as f:
+                f.write(creds_env.strip())
+            logger.info("Successfully provisioned %s from GOOGLE_CREDENTIALS_JSON environment variable.", credentials_path)
+        except Exception as e:
+            logger.error("Failed to write %s from environment variable: %s", credentials_path, e)
+
+
 def get_google_tasks_service(
     credentials_path: str = "credentials.json",
     token_path: str = "token.json",
 ):
     """
     Authenticates via OAuth 2.0 and returns the Google Tasks API service.
-    Generates token.json on first authorization.
+    Generates token.json on first authorization if running interactively.
     """
     creds = None
 
@@ -112,7 +140,7 @@ def get_google_tasks_service(
             if not os.path.exists(credentials_path):
                 raise FileNotFoundError(
                     f"Google OAuth credentials file '{credentials_path}' not found! "
-                    "Please download credentials.json (Desktop Client) from Google Cloud Console."
+                    "Please provide credentials.json or set GOOGLE_TOKEN_JSON / GOOGLE_CREDENTIALS_JSON."
                 )
             logger.info("Starting local OAuth browser flow to authorize Google Tasks access...")
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
@@ -167,32 +195,37 @@ def print_sync_summary(summary: Dict[str, Any]) -> None:
             print(f"  - {Fore.YELLOW}{item.get('content')}{Style.RESET_ALL} -> Error: {item.get('error')}")
 
     print("\n" + "=" * 80 + "\n")
-def sync_tasks(service, todoist_client: TodoistClient):
-    """Google Tasks üzerindeki TÜM listelerdeki açık görevleri Todoist'e aktarır ve siler."""
+
+
+def sync_tasks(service, todoist_client: TodoistClient) -> int:
+    """
+    Fetches open tasks across all Google Tasks lists, converts and pushes them to Todoist,
+    and removes successfully migrated tasks from Google Tasks.
+    """
     try:
         tasklists_result = service.tasklists().list().execute()
         tasklists = tasklists_result.get("items", [])
 
         if not tasklists:
+            logger.info("No Google Tasks lists found.")
             return 0
 
-        # TodoistClient.create_tasks_batch metodunun beklediği yapıya uygun dict hazırlığı için
         summary = {
             "created_tasks": [],
             "failed_tasks": [],
             "total": 0,
-            "synced": 0
+            "synced": 0,
         }
 
         for tlist in tasklists:
             list_id = tlist["id"]
 
             results = service.tasks().list(
-                tasklist=list_id, 
-                showCompleted=False, 
-                showHidden=True
+                tasklist=list_id,
+                showCompleted=False,
+                showHidden=True,
             ).execute()
-            
+
             items = results.get("items", [])
             if not items:
                 continue
@@ -204,10 +237,10 @@ def sync_tasks(service, todoist_client: TodoistClient):
                 title = item.get("title", "").strip()
                 if not title:
                     continue
-                
+
                 notes = item.get("notes")
                 parsed_task = parse_google_task(title, notes)
-                
+
                 tasks_payloads.append(parsed_task)
                 task_id_map.append(item["id"])
                 summary["total"] += 1
@@ -215,19 +248,17 @@ def sync_tasks(service, todoist_client: TodoistClient):
             if not tasks_payloads:
                 continue
 
-            # TodoistClient sınıfının kendi toplu aktarım (batch) metodunu çağırıyoruz
+            # Batch transfer to Todoist
             batch_result = todoist_client.create_tasks_batch(tasks_payloads)
-            
+
             created_list = batch_result.get("created", [])
             failed_list = batch_result.get("failed", [])
 
-            # Başarılı olanları özet listesine ekle ve Google Tasks'ten sil
+            # Delete successfully migrated tasks from Google Tasks
             for created_item in created_list:
                 summary["created_tasks"].append(created_item)
                 summary["synced"] += 1
 
-                # Hangi Google Task ID'ye denk geldiğini bulup sileceğiz
-                # Sıralama paralel gittiği için eşleşen orijinal görevi buluyoruz
                 orig = created_item.get("original_task")
                 if orig in tasks_payloads:
                     idx = tasks_payloads.index(orig)
@@ -235,7 +266,7 @@ def sync_tasks(service, todoist_client: TodoistClient):
                     try:
                         service.tasks().delete(tasklist=list_id, task=g_task_id).execute()
                     except Exception as del_err:
-                        logger.error("Google Task silinemedi (%s): %s", g_task_id, del_err)
+                        logger.error("Failed to delete Google Task (%s): %s", g_task_id, del_err)
 
             for failed_item in failed_list:
                 summary["failed_tasks"].append(failed_item)
@@ -246,8 +277,42 @@ def sync_tasks(service, todoist_client: TodoistClient):
         return summary["synced"]
 
     except Exception as e:
-        logger.error("Senkronizasyon sırasında hata oluştu: %s", e)
+        logger.error("Error occurred during synchronization: %s", e)
         return 0
+
+
+def run_sync(
+    credentials_path: str = "credentials.json",
+    token_path: str = "token.json",
+) -> int:
+    """
+    Executes a one-shot synchronization run.
+    """
+    setup_cloud_credentials(credentials_path=credentials_path, token_path=token_path)
+    service = get_google_tasks_service(credentials_path=credentials_path, token_path=token_path)
+    todoist_client = TodoistClient()
+    return sync_tasks(service, todoist_client)
+
+
+def main_handler(event: Any = None, context: Any = None) -> Dict[str, Any]:
+    """
+    Serverless entry point suitable for AWS Lambda, Google Cloud Functions, or Cloud Run Jobs.
+    """
+    try:
+        synced_count = run_sync()
+        return {
+            "statusCode": 200,
+            "status": "success",
+            "synced_count": synced_count,
+        }
+    except Exception as e:
+        logger.error("Serverless sync handler failed: %s", e)
+        return {
+            "statusCode": 500,
+            "status": "error",
+            "error": str(e),
+        }
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -256,7 +321,7 @@ def main() -> None:
     parser.add_argument(
         "--watch",
         action="store_true",
-        help="Run continuously in watcher mode.",
+        help="Run continuously in watcher polling mode.",
     )
     parser.add_argument(
         "--interval",
@@ -278,6 +343,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Automatically provision cloud credentials if passed via environment variables
+    setup_cloud_credentials(credentials_path=args.credentials, token_path=args.token)
 
     print(f"{Fore.CYAN}🔌 Initializing Google Tasks OAuth and Todoist Client...{Style.RESET_ALL}")
 
@@ -306,7 +374,8 @@ def main() -> None:
             print(f"\n{Fore.CYAN}🛑 Watcher stopped by user.{Style.RESET_ALL}")
     else:
         print(f"\n{Fore.CYAN}⚡ Running one-shot synchronization...{Style.RESET_ALL}")
-        sync_tasks(service, todoist_client)
+        synced = sync_tasks(service, todoist_client)
+        print(f"{Fore.GREEN}✨ Sync complete. Total synced: {synced}{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":
