@@ -1,0 +1,16 @@
+[
+    {
+        "content": "ESP32 Termometre Devre Şeması İncelemesi",
+        "project_name": "Odak & Gelişim",
+        "due_string": "today",
+        "priority": 3,
+        "description": "DHT22 veya DS18B20 pinout incelemesi yapılacak"
+    },
+    {
+        "content": "Gmail API Harcama Takibi Kurgusu",
+        "project_name": "Odak & Gelişim",
+        "due_string": "tomorrow",
+        "priority": 2,
+        "description": "Banka dekont formatlarını regex ile ayrıştırma"
+    }
+]
