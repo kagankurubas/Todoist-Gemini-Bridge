@@ -1,0 +1,13 @@
+# Çevre değişkenleri (API anahtarları)
+.env
+*.env
+
+# Python ortamı ve cache
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# IDE ayarları
+.vscode/
+.idea/
