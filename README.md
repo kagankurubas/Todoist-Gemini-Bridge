@@ -7,12 +7,12 @@
   <img src="https://img.shields.io/badge/Pydantic-v2-e92063?logo=pydantic&logoColor=white" alt="Pydantic" />
   <img src="https://img.shields.io/badge/Todoist_API-v1-e44332?logo=todoist&logoColor=white" alt="Todoist API" />
   <img src="https://img.shields.io/badge/Google_Tasks-OAuth_2.0-4285F4?logo=google&logoColor=white" alt="Google Tasks API" />
-  <img src="https://img.shields.io/badge/Tests-27%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
+  <img src="https://img.shields.io/badge/Tests-59%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
 <p align="center">
-  <strong>A lightweight, extensible automation bridge & Model Context Protocol (MCP) server that converts AI/LLM outputs and Google Tasks into structured Todoist tasks with smart project routing, natural language due dates, and validation.</strong>
+  <strong>An automation bridge and local Model Context Protocol (MCP) server that converts AI/LLM outputs and Google Tasks into structured Todoist tasks with smart project routing, natural language due dates, and validation.</strong>
 </p>
 
 <p align="center">
@@ -30,8 +30,8 @@
 ```mermaid
 flowchart TD
     subgraph Sources["📥 Input Sources"]
-        A1["🤖 Claude Desktop (MCP Client)"]
-        A2["🤖 LLMs (Gemini, ChatGPT, DeepSeek)"]
+        A1["🤖 Claude Desktop (MCP Client via STDIO)"]
+        A2["🤖 LLMs (Gemini, ChatGPT)"]
         A3["📱 Google Tasks"]
         A4["⚡ Automations (n8n, Make, Webhooks)"]
         A5["💻 CLI / JSON Files"]
@@ -39,7 +39,7 @@ flowchart TD
 
     subgraph CoreBridge["🌉 Core Bridge Engine"]
         B1["🧹 Parser & Cleaner\n(Markdown fences, #Project, p[1-4], @Date)"]
-        B2["🛡️ Pydantic Validation\n(TaskPayload, BatchTaskPayload)"]
+        B2["🛡️ Pydantic Validation\n(TaskPayload, BatchTaskPayload - Max 50)"]
         B3["🎯 Smart Project Resolver\n(Case-insensitive project_name ➔ project_id)"]
     end
 
@@ -78,15 +78,15 @@ flowchart TD
 <a name="english"></a>
 ## 🇬🇧 English
 
-Todoist Gemini Bridge is an open-source Python automation toolkit and **Model Context Protocol (MCP)** server. It enables AI assistants (Claude Desktop, Gemini, ChatGPT), automation workflows (Google Tasks, n8n, Make), and developers to interact seamlessly with Todoist using smart project resolution, natural language recurring schedules, and strict schema validation.
+Todoist Gemini Bridge is an open-source Python automation toolkit and local **Model Context Protocol (MCP)** server. It enables AI assistants (such as Claude Desktop), automation workflows (Google Tasks, n8n, Make), and developers to interact with Todoist using smart project resolution, natural language recurring schedules, and strict schema validation.
 
 ### 🌟 Key Features
 
-- **🤖 Model Context Protocol (MCP) Server (`todoist_mcp.py`):** Native FastMCP server for Claude Desktop with tools to create, query/filter, and complete Todoist tasks.
-- **🛡️ Pydantic Validation:** Strict type-safe schema verification for individual and batch task creation payloads.
+- **🤖 Model Context Protocol (MCP) Server (`todoist_mcp.py`):** FastMCP server over STDIO for Claude Desktop with tools to create (`create_task`), query/filter (`list_tasks`), and complete (`complete_task`) Todoist tasks with sanitized error handling.
+- **🛡️ Pydantic & Batch Validation:** Strict type-safe schema verification with a 50-task maximum batch limit for both dictionary and list payloads.
 - **📱 Google Tasks → Todoist Sync Worker (`sync_worker.py`):** OAuth 2.0 daemon that synchronizes tasks from Google Tasks, parses tags (`#Project`, `p[1-4]`, `@Date`), pushes them to Todoist, and cleans up Google Tasks.
-- **🎯 Smart Project Resolution:** Dynamically maps human-readable project names (case-insensitive) to Todoist `project_id`. Defaults safely to `Inbox` if not found.
-- **⚡ FastAPI Webhook API (`app.py`):** Secure REST API with timing-attack safe header authentication (`X-Bridge-Token`) and CORS support.
+- **🎯 Smart Project Resolution:** Dynamically maps human-readable project names (case-insensitive with Unicode normalization) to Todoist `project_id`. Defaults safely to `Inbox` if not found.
+- **⚡ FastAPI Webhook API (`app.py`):** REST API with timing-attack safe header authentication (`X-Bridge-Token`) and configurable CORS origin filtering.
 - **🧹 Markdown & JSON Extraction:** Automatically strips markdown code fences (````json ... ````) from raw LLM outputs.
 - **💻 Standalone CLI Tools:** Direct execution script (`main.py`) and webhook dispatcher client (`send_to_bridge.py`).
 - **🤖 Gemini Function Calling Ready (`gemini_tool_schema.json`):** Pre-configured JSON schema for Google Gemini tool use.
@@ -95,7 +95,7 @@ Todoist Gemini Bridge is an open-source Python automation toolkit and **Model Co
 
 ```text
 Todoist-Gemini-Bridge/
-├── todoist_mcp.py          # FastMCP server for Claude Desktop / MCP clients
+├── todoist_mcp.py          # FastMCP server for Claude Desktop (STDIO)
 ├── app.py                  # FastAPI Web Application & REST API
 ├── send_to_bridge.py       # Standalone CLI client for FastAPI webhook
 ├── sync_worker.py          # Google Tasks → Todoist sync worker (OAuth 2.0)
@@ -106,8 +106,8 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Direct Todoist CLI runner & table formatter
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Schema
 ├── tasks_sample.json       # Sample task template
-├── tests/                  # Pytest test suite (27 unit & integration tests)
-├── Dockerfile              # Container definition for Cloud Run & Docker
+├── tests/                  # Pytest test suite (59 unit & integration tests)
+├── Dockerfile              # Docker container (runs sync_worker.py by default)
 ├── .dockerignore           # Excluded files for Docker build context
 ├── requirements.txt        # Python dependencies
 └── .env.example            # Environment variable template
@@ -262,11 +262,11 @@ Todoist Gemini Bridge, yapay zeka modelleri (Claude Desktop, Gemini, ChatGPT), o
 
 ### 🌟 Öne Çıkan Özellikler
 
-- **🤖 Model Context Protocol (MCP) Sunucusu (`todoist_mcp.py`):** Claude Desktop için FastMCP mimarisiyle geliştirilmiş; görev oluşturma, listeleme ve tamamlama araçları.
-- **🛡️ Pydantic ile Şema Doğrulama:** Tekil veya toplu görev verilerinin tiplerini ve şemalarını doğrular.
+- **🤖 Model Context Protocol (MCP) Sunucusu (`todoist_mcp.py`):** Claude Desktop için FastMCP mimarisiyle yerel STDIO üzerinden çalışan; görev oluşturma (`create_task`), listeleme (`list_tasks`) ve tamamlama (`complete_task`) araçları.
+- **🛡️ Pydantic ile Doğrulama & Toplu İşlem Limiti:** Tekil veya toplu görev verilerinin tiplerini doğrular; tek seferde en fazla 50 görev sınırını hem liste hem sözlük formatında zorunlu kılar.
 - **📱 Google Tasks → Todoist Senkronizasyonu (`sync_worker.py`):** Google Tasks'teki görevleri okur, etiketleri (`#Proje`, `p[1-4]`, `@Tarih`) ayrıştırır, Todoist'e aktarır ve aktarılanları siler.
-- **🎯 Akıllı Proje Eşleme:** Proje isimlerini (`project_name`) büyük/küçük harf duyarsız dinamik olarak Todoist proje ID'lerine eşler; bulunamazsa güvenli bir şekilde `Gelen Kutusu`na (Inbox) yönlendirir.
-- **⚡ FastAPI Webhook API (`app.py`):** Zamanlama saldırılarına korumalı (timing-safe) `X-Bridge-Token` başlık doğrulaması ve CORS desteği içeren REST servisi.
+- **🎯 Akıllı Proje Eşleme:** Proje isimlerini (`project_name`) büyük/küçük harf duyarsız ve Türkçe karakter uyumlu olarak dinamik Todoist proje ID'lerine eşler; bulunamazsa güvenli bir şekilde `Gelen Kutusu`na (Inbox) yönlendirir.
+- **⚡ FastAPI Webhook API (`app.py`):** Zamanlama saldırılarına korumalı (timing-safe) `X-Bridge-Token` başlık doğrulaması ve yapılandırılabilir CORS köken filtreleme desteği içeren REST servisi.
 - **🧹 Markdown & JSON Ayıklama:** LLM çıktılarındaki markdown formatlı kod bloklarını (````json ... ````) otomatik olarak temizler.
 - **💻 Bağımsız CLI Araçları:** Sunucusuz doğrudan görev ekleme (`main.py`) ve webhook istemcisi (`send_to_bridge.py`).
 
@@ -274,7 +274,7 @@ Todoist Gemini Bridge, yapay zeka modelleri (Claude Desktop, Gemini, ChatGPT), o
 
 ```text
 Todoist-Gemini-Bridge/
-├── todoist_mcp.py          # Claude Desktop / MCP istemcileri için FastMCP sunucusu
+├── todoist_mcp.py          # Claude Desktop için FastMCP sunucusu (STDIO)
 ├── app.py                  # FastAPI Web Uygulaması ve REST API
 ├── send_to_bridge.py       # FastAPI webhook istemcisi (CLI)
 ├── sync_worker.py          # Google Tasks → Todoist senkronizasyon servisi
@@ -285,8 +285,8 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Doğrudan Todoist CLI çalıştırıcısı ve tablo formatlayıcı
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Şeması
 ├── tasks_sample.json       # Örnek görev şablonu
-├── tests/                  # Pytest test paketi (27 birim ve entegrasyon testi)
-├── Dockerfile              # Cloud Run & Docker konteyner tanımı
+├── tests/                  # Pytest test paketi (59 birim ve entegrasyon testi)
+├── Dockerfile              # Docker konteyner tanımı (varsayılan: sync_worker.py)
 ├── .dockerignore           # Docker derleme bağlamı hariç tutma listesi
 ├── requirements.txt        # Python bağımlılıkları
 └── .env.example            # Çevre değişkeni şablonu
@@ -324,6 +324,7 @@ cp .env.example .env
 ```env
 TODOIST_API_TOKEN=kendi_todoist_api_tokeniniz
 WEBHOOK_SECRET_TOKEN=guclu_ve_rastgele_bir_gizli_anahtar
+ALLOWED_ORIGINS=*
 ```
 
 **Anahtarlarınızı Alma:**
@@ -431,7 +432,7 @@ python send_to_bridge.py --file tasks_sample.json
 <a name="tests"></a>
 ## 🧪 Testing / Testleri Çalıştırma
 
-Projede 27 adet birim ve entegrasyon testi yer almaktadır:
+Projede 59 adet birim ve entegrasyon testi yer almaktadır:
 
 ```bash
 # Tüm testleri çalıştırmak için:

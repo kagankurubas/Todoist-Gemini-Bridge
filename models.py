@@ -47,5 +47,6 @@ class BatchTaskPayload(BaseModel):
 
     tasks: List[TaskPayload] = Field(
         default_factory=list,
-        description="List of task payloads.",
+        max_length=50,
+        description="List of task payloads (maximum 50 tasks per batch).",
     )

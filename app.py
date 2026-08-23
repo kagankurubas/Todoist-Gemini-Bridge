@@ -27,9 +27,15 @@ app = FastAPI(
 )
 
 # CORS Middleware
+def _parse_allowed_origins(raw: str) -> List[str]:
+    cleaned = (raw or "").strip()
+    if cleaned == "*" or not cleaned:
+        return ["*"]
+    return [origin.strip() for origin in cleaned.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_parse_allowed_origins(settings.ALLOWED_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -58,7 +64,7 @@ async def verify_bridge_token(token: Optional[str] = Security(bridge_token_heade
 # Exception Handlers
 @app.exception_handler(TodoistAuthError)
 async def auth_exception_handler(request, exc: TodoistAuthError):
-    logger.error("Authentication error with Todoist: %s", exc)
+    logger.error("Authentication error with Todoist (error_type=%s)", type(exc).__name__, exc_info=False)
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={"error": "Unauthorized", "detail": "Todoist authentication failed. Check server configuration."},
@@ -67,7 +73,7 @@ async def auth_exception_handler(request, exc: TodoistAuthError):
 
 @app.exception_handler(TodoistValidationError)
 async def validation_exception_handler(request, exc: TodoistValidationError):
-    logger.error("Todoist validation error: %s", exc)
+    logger.error("Todoist validation error (error_type=%s)", type(exc).__name__, exc_info=False)
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"error": "Bad Request", "detail": "Invalid data provided to Todoist API."},
@@ -76,7 +82,7 @@ async def validation_exception_handler(request, exc: TodoistValidationError):
 
 @app.exception_handler(TodoistServerError)
 async def server_exception_handler(request, exc: TodoistServerError):
-    logger.error("Todoist remote server error: %s", exc)
+    logger.error("Todoist remote server error (error_type=%s)", type(exc).__name__, exc_info=False)
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
         content={"error": "Todoist Server Error", "detail": "Todoist service is temporarily unavailable."},
@@ -85,7 +91,7 @@ async def server_exception_handler(request, exc: TodoistServerError):
 
 @app.exception_handler(TodoistAPIError)
 async def api_exception_handler(request, exc: TodoistAPIError):
-    logger.error("Todoist API error: %s", exc)
+    logger.error("Todoist API error (error_type=%s)", type(exc).__name__, exc_info=False)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"error": "Todoist API Error", "detail": "Internal error communicating with Todoist."},
@@ -108,13 +114,13 @@ async def get_projects() -> List[Dict[str, Any]]:
         client = TodoistClient()
         return client.get_projects()
     except TodoistAPIError as e:
-        logger.error("Todoist API error in get_projects: %s", e)
+        logger.error("Todoist API error in get_projects (status=%s, error_type=%s)", getattr(e, "status_code", None), type(e).__name__, exc_info=False)
         raise HTTPException(
             status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error communicating with Todoist API. Check server logs for details.",
         )
     except Exception as e:
-        logger.error("Unexpected error fetching projects: %s", e, exc_info=True)
+        logger.error("Unexpected error fetching projects (error_type=%s)", type(e).__name__, exc_info=False)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error. Check server logs for details.",
@@ -147,11 +153,17 @@ async def create_tasks(
             detail="No tasks provided in payload.",
         )
 
+    if len(tasks_to_create) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch size exceeds maximum limit of 50 tasks (received {len(tasks_to_create)}).",
+        )
+
     try:
         client = TodoistClient()
         project_map = build_project_map(client)
     except Exception as e:
-        logger.error("Failed to connect to Todoist or fetch project map: %s", e, exc_info=True)
+        logger.error("Failed to connect to Todoist or fetch project map (error_type=%s)", type(e).__name__, exc_info=False)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error. Check server logs for details.",
@@ -183,7 +195,7 @@ async def create_tasks(
                 "url": task_url,
             })
         except Exception as e:
-            logger.error("Error creating task '%s': %s", task.content, e)
+            logger.error("Error creating task '%s' (error_type=%s)", task.content, type(e).__name__, exc_info=False)
             failed_tasks.append({
                 "content": task.content,
                 "project_name": task.project_name,

@@ -1,6 +1,6 @@
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from app import app
+from app import _parse_allowed_origins, app
 from config import settings
 
 client = TestClient(app)
@@ -33,6 +33,23 @@ def test_projects_authorized(mock_todoist_class):
     data = response.json()
     assert len(data) == 2
     assert data[0]["name"] == "Inbox"
+
+
+@patch("app.TodoistClient")
+def test_projects_internal_error_sanitized(mock_todoist_class, caplog):
+    mock_instance = mock_todoist_class.return_value
+    mock_instance.get_projects.side_effect = Exception(
+        "TODOIST_API_TOKEN=SUPER_SECRET_TOKEN_123 Authorization: Bearer SUPER_SECRET_TOKEN_123"
+    )
+
+    headers = {"X-Bridge-Token": settings.WEBHOOK_SECRET_TOKEN}
+    with caplog.at_level("INFO"):
+        response = client.get("/projects", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Internal server error. Check server logs for details."
+    assert "SUPER_SECRET_TOKEN_123" not in response.text
+    assert "SUPER_SECRET_TOKEN_123" not in caplog.text
 
 
 def test_create_tasks_unauthorized():
@@ -91,3 +108,30 @@ def test_create_tasks_batch_payload(mock_todoist_class):
     assert data["success"] is True
     assert data["total"] == 2
     assert data["created_count"] == 2
+
+
+def test_create_tasks_batch_limit_exceeded_dict():
+    headers = {"X-Bridge-Token": settings.WEBHOOK_SECRET_TOKEN}
+    # 51 tasks in {"tasks": [...]}
+    payload = {"tasks": [{"content": f"Task {i}"} for i in range(51)]}
+    response = client.post("/tasks", json=payload, headers=headers)
+    assert response.status_code in [400, 422]
+
+
+def test_create_tasks_batch_limit_exceeded_raw_list():
+    headers = {"X-Bridge-Token": settings.WEBHOOK_SECRET_TOKEN}
+    # 51 tasks in raw list [{...}, ...]
+    payload = [{"content": f"Task {i}"} for i in range(51)]
+    response = client.post("/tasks", json=payload, headers=headers)
+    assert response.status_code == 400
+    assert "Batch size exceeds maximum limit of 50 tasks" in response.json()["detail"]
+
+
+def test_cors_origins_parsing():
+    assert _parse_allowed_origins("*") == ["*"]
+    assert _parse_allowed_origins("") == ["*"]
+    assert _parse_allowed_origins("   ") == ["*"]
+    assert _parse_allowed_origins("http://localhost:3000, http://127.0.0.1:3000") == [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]

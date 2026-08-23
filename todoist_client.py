@@ -59,10 +59,9 @@ class TodoistClient:
 
         error_detail = response.text
         logger.error(
-            "Todoist API Error [%s]: %s - Response: %s",
+            "Todoist API Error [%s]: %s",
             status_code,
             response.reason,
-            error_detail,
         )
 
         if status_code == 401:
