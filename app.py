@@ -1,4 +1,5 @@
 import logging
+import secrets
 from typing import Any, Dict, List, Optional, Union
 from fastapi import Body, Depends, FastAPI, HTTPException, Security, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +30,6 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -44,9 +44,9 @@ bridge_token_header = APIKeyHeader(
 
 async def verify_bridge_token(token: Optional[str] = Security(bridge_token_header)) -> str:
     """
-    Validates that the incoming request contains a valid X-Bridge-Token header.
+    Validates that the incoming request contains a valid X-Bridge-Token header using constant-time comparison.
     """
-    if not token or token != settings.WEBHOOK_SECRET_TOKEN:
+    if not token or not secrets.compare_digest(token, settings.WEBHOOK_SECRET_TOKEN):
         logger.warning("Unauthorized access attempt: Invalid or missing X-Bridge-Token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -61,7 +61,7 @@ async def auth_exception_handler(request, exc: TodoistAuthError):
     logger.error("Authentication error with Todoist: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        content={"error": "Unauthorized", "detail": str(exc)},
+        content={"error": "Unauthorized", "detail": "Todoist authentication failed. Check server configuration."},
     )
 
 
@@ -70,7 +70,7 @@ async def validation_exception_handler(request, exc: TodoistValidationError):
     logger.error("Todoist validation error: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
-        content={"error": "Bad Request", "detail": str(exc)},
+        content={"error": "Bad Request", "detail": "Invalid data provided to Todoist API."},
     )
 
 
@@ -79,7 +79,7 @@ async def server_exception_handler(request, exc: TodoistServerError):
     logger.error("Todoist remote server error: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
-        content={"error": "Todoist Server Error", "detail": str(exc)},
+        content={"error": "Todoist Server Error", "detail": "Todoist service is temporarily unavailable."},
     )
 
 
@@ -88,7 +88,7 @@ async def api_exception_handler(request, exc: TodoistAPIError):
     logger.error("Todoist API error: %s", exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"error": "Todoist API Error", "detail": str(exc)},
+        content={"error": "Todoist API Error", "detail": "Internal error communicating with Todoist."},
     )
 
 
@@ -108,15 +108,16 @@ async def get_projects() -> List[Dict[str, Any]]:
         client = TodoistClient()
         return client.get_projects()
     except TodoistAPIError as e:
+        logger.error("Todoist API error in get_projects: %s", e)
         raise HTTPException(
             status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
+            detail="Error communicating with Todoist API. Check server logs for details.",
         )
     except Exception as e:
-        logger.error("Unexpected error fetching projects: %s", e)
+        logger.error("Unexpected error fetching projects: %s", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {e}",
+            detail="Internal server error. Check server logs for details.",
         )
 
 
@@ -150,10 +151,10 @@ async def create_tasks(
         client = TodoistClient()
         project_map = build_project_map(client)
     except Exception as e:
-        logger.error("Failed to connect to Todoist or fetch project map: %s", e)
+        logger.error("Failed to connect to Todoist or fetch project map: %s", e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initialize Todoist connection: {e}",
+            detail="Internal server error. Check server logs for details.",
         )
 
     successful_tasks = []
@@ -186,7 +187,7 @@ async def create_tasks(
             failed_tasks.append({
                 "content": task.content,
                 "project_name": task.project_name,
-                "error": str(e),
+                "error": "Failed to create task in Todoist. Check server logs for details.",
             })
 
     return {
@@ -201,4 +202,4 @@ async def create_tasks(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=8000)

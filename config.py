@@ -15,8 +15,12 @@ class Settings(BaseSettings):
         description="Todoist API token for authenticating REST requests",
     )
     WEBHOOK_SECRET_TOKEN: str = Field(
-        default="supersecret",
+        ...,
         description="Secret token for authenticating incoming webhooks / API requests",
+    )
+    ALLOWED_ORIGINS: str = Field(
+        default="*",
+        description="Allowed CORS origins comma-separated or * for all origins",
     )
 
     model_config = SettingsConfigDict(
