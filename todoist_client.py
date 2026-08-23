@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional, Union
 import requests
 from config import settings
 
-# Setup module logger
 logger = logging.getLogger(__name__)
 
 
@@ -62,6 +61,7 @@ class TodoistClient:
             "Todoist API Error [%s]: %s",
             status_code,
             response.reason,
+            exc_info=False,
         )
 
         if status_code == 401:
@@ -106,8 +106,12 @@ class TodoistClient:
                 return data["results"]
             return data
         except requests.RequestException as e:
-            logger.error("Network error while fetching projects: %s", e)
-            raise TodoistAPIError(f"Network error while connecting to Todoist API: {e}") from e
+            logger.error(
+                "Network error while fetching projects (error_type=%s)",
+                type(e).__name__,
+                exc_info=False,
+            )
+            raise TodoistAPIError(f"Network error while connecting to Todoist API: {type(e).__name__}") from e
 
     def resolve_project_name(self, project_name: str) -> Optional[str]:
         """
@@ -122,7 +126,12 @@ class TodoistClient:
                 if p.get("name", "").strip().lower() == norm:
                     return str(p.get("id"))
         except Exception as e:
-            logger.warning("Error resolving project name '%s': %s", project_name, e)
+            logger.warning(
+                "Error resolving project name '%s' (error_type=%s)",
+                project_name,
+                type(e).__name__,
+                exc_info=False,
+            )
         return None
 
     def create_task(
@@ -214,14 +223,25 @@ class TodoistClient:
         if task_description:
             payload["description"] = task_description
 
-        logger.debug("Creating task at %s with payload: %s", url, payload)
+        logger.debug(
+            "Creating Todoist task (content_len=%d, has_description=%s, has_due=%s, has_project_id=%s, priority=%d)",
+            len(task_content),
+            bool(task_description),
+            bool(task_due_string or task_due_date or task_due_datetime),
+            bool(task_project_id),
+            task_priority,
+        )
 
         try:
             response = self.session.post(url, json=payload, timeout=self.timeout)
             return self._handle_response(response)
         except requests.RequestException as e:
-            logger.error("Network error while creating task: %s", e)
-            raise TodoistAPIError(f"Network error while connecting to Todoist API: {e}") from e
+            logger.error(
+                "Network error while creating task (error_type=%s)",
+                type(e).__name__,
+                exc_info=False,
+            )
+            raise TodoistAPIError(f"Network error while connecting to Todoist API: {type(e).__name__}") from e
 
     def create_tasks_batch(
         self,
@@ -247,7 +267,11 @@ class TodoistClient:
                     if p.get("name")
                 }
             except Exception as e:
-                logger.warning("Failed to fetch project map in create_tasks_batch: %s", e)
+                logger.warning(
+                    "Failed to fetch project map in create_tasks_batch (error_type=%s)",
+                    type(e).__name__,
+                    exc_info=False,
+                )
                 project_map = {}
 
         created_tasks = []
@@ -300,11 +324,16 @@ class TodoistClient:
                     "raw": created,
                 })
             except Exception as e:
-                logger.error("Failed to create task '%s': %s", content, e)
+                logger.error(
+                    "Failed to create task in create_tasks_batch (content_len=%d, error_type=%s)",
+                    len(content) if isinstance(content, str) else 0,
+                    type(e).__name__,
+                    exc_info=False,
+                )
                 failed_tasks.append({
                     "original_task": task,
                     "content": content,
-                    "error": str(e),
+                    "error": "Failed to create task in Todoist.",
                 })
 
         return {
@@ -319,7 +348,6 @@ class TodoistClient:
 
 if __name__ == "__main__":
     import sys
-    # Set standard output to utf-8 if supported
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
 
