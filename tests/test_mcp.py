@@ -11,17 +11,21 @@ from todoist_mcp import (
     MAX_DESCRIPTION_LENGTH,
     MAX_DUE_STRING_LENGTH,
     MAX_FILTER_QUERY_LENGTH,
+    MAX_LABEL_NAME_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
     MAX_TASK_ID_LENGTH,
     _find_project_id,
     _resolve_project,
     complete_task,
+    create_label,
     create_project,
     create_task,
     delete_project,
     delete_task,
+    list_labels,
     list_projects,
     list_tasks,
+    reopen_task,
     update_task,
 )
 
@@ -29,12 +33,31 @@ from todoist_mcp import (
 class MockProject:
     """Mock Todoist project object."""
 
-    def __init__(self, project_id: str, name: str, is_inbox: bool = False, color: str = None, url: str = None):
+    def __init__(
+        self,
+        project_id: str,
+        name: str,
+        is_inbox: bool = False,
+        color: str = None,
+        url: str = None,
+        parent_id: str = None,
+    ):
         self.id = project_id
         self.name = name
         self.is_inbox_project = is_inbox
         self.color = color
         self.url = url or f"https://app.todoist.com/app/project/{project_id}"
+        self.parent_id = parent_id
+
+
+class MockLabel:
+    """Mock Todoist label object."""
+
+    def __init__(self, label_id: str, name: str, color: str = None, is_favorite: bool = False):
+        self.id = label_id
+        self.name = name
+        self.color = color
+        self.is_favorite = is_favorite
 
 
 class MockTask:
@@ -48,6 +71,7 @@ class MockTask:
         due_string: str = None,
         description: str = "",
         url: str = None,
+        labels: list = None,
     ):
         self.id = task_id
         self.content = content
@@ -55,6 +79,7 @@ class MockTask:
         self.due = MagicMock(string=due_string) if due_string else None
         self.description = description
         self.url = url or f"https://app.todoist.com/app/task/{task_id}"
+        self.labels = labels or []
 
 
 # =====================================================================
@@ -73,6 +98,7 @@ def test_create_task_success(mock_get_client):
         content="Read 10 pages",
         priority=2,
         due_string="tomorrow at 10:00",
+        labels=["kitap", "odak"],
     )
 
     result = create_task(
@@ -81,6 +107,7 @@ def test_create_task_success(mock_get_client):
         project_name="Odak & Gelişim",
         due_string="tomorrow at 10:00",
         priority=2,
+        labels=["@kitap", "odak"],
     )
 
     assert "✅ Görev başarıyla oluşturuldu!" in result
@@ -88,12 +115,14 @@ def test_create_task_success(mock_get_client):
     assert "Başlık: Read 10 pages" in result
     assert "Proje: Odak & Gelişim" in result
     assert "Öncelik: p2" in result
+    assert "Etiketler: @kitap, @odak" in result
     mock_api.add_task.assert_called_once_with(
         content="Read 10 pages",
         description="Daily habit",
         project_id="proj_100",
         due_string="tomorrow at 10:00",
         priority=2,
+        labels=["kitap", "odak"],
     )
 
 
@@ -157,6 +186,11 @@ def test_create_task_invalid_priority_rejected(invalid_priority):
     assert "❌ Invalid input: Priority must be an integer between 1" in result
 
 
+def test_create_task_invalid_labels_type():
+    result = create_task(content="Valid task", labels="not_a_list")
+    assert "❌ Invalid input: Labels must be a list of strings" in result
+
+
 @patch("todoist_mcp._get_api_client")
 def test_create_task_sanitizes_exception_and_logs_cleanly(mock_get_client, caplog):
     mock_api = MagicMock()
@@ -185,13 +219,13 @@ def test_list_tasks_success(mock_get_client):
     mock_api = MagicMock()
     mock_get_client.return_value = mock_api
 
-    task1 = MockTask("t1", "First task", priority=4, due_string="today", description="Note 1")
+    task1 = MockTask("t1", "First task", priority=4, due_string="today", description="Note 1", labels=["acil"])
     task2 = MockTask("t2", "Second task", priority=1, due_string=None)
     mock_api.filter_tasks.return_value = [[task1, task2]]
 
     result = list_tasks(filter_query="today")
     assert "📋 Açık Görevler (Filtre: 'today', Toplam: 2):" in result
-    assert "[t1] First task" in result
+    assert "[t1] First task [@acil]" in result
     assert "🔴 p4 (Çok Acil)" in result
     assert "Tarih: today" in result
     assert "Açıklama: Note 1" in result
@@ -238,7 +272,7 @@ def test_list_tasks_sanitizes_exception_and_logs_cleanly(mock_get_client, caplog
 
 
 # =====================================================================
-# COMPLETE_TASK TESTS
+# COMPLETE_TASK & REOPEN_TASK TESTS
 # =====================================================================
 
 @patch("todoist_mcp._get_api_client")
@@ -289,6 +323,43 @@ def test_complete_task_sanitizes_exception_and_logs_cleanly(mock_get_client, cap
     assert "SUPER_SECRET_TOKEN_123" not in caplog.text
 
 
+@patch("todoist_mcp._get_api_client")
+def test_reopen_task_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.uncomplete_task.return_value = True
+
+    result = reopen_task(task_id="  task_reopen_1  ")
+    assert "🔄 Görev başarıyla yeniden açıldı (ID: task_reopen_1)." in result
+    mock_api.uncomplete_task.assert_called_once_with(task_id="task_reopen_1")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_reopen_task_unsuccessful(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.uncomplete_task.return_value = False
+
+    result = reopen_task(task_id="task_already_active")
+    assert "⚠️ Görev yeniden açılamadı veya zaten açık olabilir (ID: task_already_active)." in result
+
+
+def test_reopen_task_empty_id():
+    result = reopen_task(task_id="   ")
+    assert "❌ Invalid input: Task ID cannot be empty" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_reopen_task_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.uncomplete_task.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = reopen_task(task_id="task_err")
+    assert result == "❌ Failed to reopen task in Todoist (ID: task_err). Check server logs for details."
+    assert "SECRET" not in result
+
+
 # =====================================================================
 # UPDATE_TASK TESTS
 # =====================================================================
@@ -307,6 +378,7 @@ def test_update_task_success(mock_get_client):
         project_name="İş",
         due_string="yarın 15:00",
         priority=3,
+        labels=["@önemli", "proje"],
     )
 
     assert "✅ Görev başarıyla güncellendi (ID: task_123)!" in result
@@ -314,6 +386,7 @@ def test_update_task_success(mock_get_client):
     assert "Açıklama: 'Yeni Açıklama'" in result
     assert "Tarih: 'yarın 15:00'" in result
     assert "Öncelik: p3" in result
+    assert "Etiketler: @önemli, @proje" in result
     assert "Hedef Proje: 'İş' (ID: proj_99)" in result
 
     mock_api.update_task.assert_called_once_with(
@@ -322,6 +395,7 @@ def test_update_task_success(mock_get_client):
         description="Yeni Açıklama",
         due_string="yarın 15:00",
         priority=3,
+        labels=["önemli", "proje"],
     )
     mock_api.move_task.assert_called_once_with(task_id="task_123", project_id="proj_99")
 
@@ -334,6 +408,11 @@ def test_update_task_no_fields_provided():
 def test_update_task_invalid_priority():
     result = update_task(task_id="task_123", priority=5)
     assert "❌ Invalid input: Priority must be an integer between 1" in result
+
+
+def test_update_task_invalid_labels_type():
+    result = update_task(task_id="task_123", labels="not_a_list")
+    assert "❌ Invalid input: Labels must be a list of strings" in result
 
 
 @patch("todoist_mcp._get_api_client")
@@ -389,7 +468,7 @@ def test_delete_task_sanitizes_exception(mock_get_client):
 
 
 # =====================================================================
-# CREATE_PROJECT TESTS
+# CREATE_PROJECT & NESTED PROJECT TESTS
 # =====================================================================
 
 @patch("todoist_mcp._get_api_client")
@@ -404,6 +483,35 @@ def test_create_project_success(mock_get_client):
     assert "İsim: Yeni Proje" in result
     assert "Renk: berry_red" in result
     mock_api.add_project.assert_called_once_with(name="Yeni Proje", color="berry_red")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_project_with_parent_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    parent_proj = MockProject("parent_123", "Ana Kategori")
+    mock_api.get_projects.return_value = [[parent_proj]]
+    mock_api.add_project.return_value = MockProject("child_456", "Alt Kategori", parent_id="parent_123")
+
+    result = create_project(
+        name="Alt Kategori",
+        parent_project_name_or_id="Ana Kategori",
+    )
+    assert "✅ Proje başarıyla oluşturuldu!" in result
+    assert "ID: child_456" in result
+    assert "İsim: Alt Kategori" in result
+    assert "Üst Proje: 'Ana Kategori' (ID: parent_123)" in result
+    mock_api.add_project.assert_called_once_with(name="Alt Kategori", parent_id="parent_123")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_project_parent_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_projects.return_value = [[]]
+
+    result = create_project(name="Alt Kategori", parent_project_name_or_id="Olmayan Proje")
+    assert "⚠️ Belirtilen üst proje bulunamadı: 'Olmayan Proje'." in result
 
 
 def test_create_project_empty_name():
@@ -480,21 +588,23 @@ def test_delete_project_empty_identifier():
 
 
 # =====================================================================
-# LIST_PROJECTS TESTS
+# LIST_PROJECTS TESTS (HIERARCHICAL)
 # =====================================================================
 
 @patch("todoist_mcp._get_api_client")
-def test_list_projects_success(mock_get_client):
+def test_list_projects_hierarchical(mock_get_client):
     mock_api = MagicMock()
     mock_get_client.return_value = mock_api
     p1 = MockProject("p1", "Gelen Kutusu", is_inbox=True)
     p2 = MockProject("p2", "İş", color="berry_red")
-    mock_api.get_projects.return_value = [[p1, p2]]
+    p3 = MockProject("p3", "Alt Görevler", parent_id="p2")
+    mock_api.get_projects.return_value = [[p1, p2, p3]]
 
     result = list_projects()
-    assert "📁 Mevcut Projeler (Toplam: 2):" in result
+    assert "📁 Mevcut Projeler (Toplam: 3):" in result
     assert "1. [p1] Gelen Kutusu [Gelen Kutusu]" in result
     assert "2. [p2] İş, Renk: berry_red" in result
+    assert "└── [p3] Alt Görevler" in result
 
 
 @patch("todoist_mcp._get_api_client")
@@ -505,6 +615,81 @@ def test_list_projects_empty(mock_get_client):
 
     result = list_projects()
     assert "ℹ️ Todoist hesabınızda herhangi bir proje bulunamadı." in result
+
+
+# =====================================================================
+# LABELS (LIST_LABELS & CREATE_LABEL) TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_list_labels_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    lbl1 = MockLabel("lbl_1", "önemli", color="berry_red", is_favorite=True)
+    lbl2 = MockLabel("lbl_2", "iş", color="blue")
+    mock_api.get_labels.return_value = [[lbl1, lbl2]]
+
+    result = list_labels()
+    assert "🏷️ Mevcut Etiketler (Toplam: 2):" in result
+    assert "1. [lbl_1] @önemli ⭐, Renk: berry_red" in result
+    assert "2. [lbl_2] @iş, Renk: blue" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_list_labels_empty(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_labels.return_value = [[]]
+
+    result = list_labels()
+    assert "ℹ️ Todoist hesabınızda herhangi bir etiket bulunamadı." in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_list_labels_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_labels.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = list_labels()
+    assert result == "❌ Failed to list labels from Todoist. Check server logs for details."
+    assert "SECRET" not in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_label_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.add_label.return_value = MockLabel("lbl_new_1", "odak", color="mint_green")
+
+    result = create_label(name="@odak", color="mint_green")
+    assert "✅ Etiket başarıyla oluşturuldu!" in result
+    assert "ID: lbl_new_1" in result
+    assert "İsim: @odak" in result
+    assert "Renk: mint_green" in result
+    mock_api.add_label.assert_called_once_with(name="odak", color="mint_green")
+
+
+def test_create_label_empty_name():
+    result = create_label(name="   ")
+    assert "❌ Invalid input: Label name cannot be empty" in result
+
+
+def test_create_label_name_too_long():
+    long_name = "L" * (MAX_LABEL_NAME_LENGTH + 1)
+    result = create_label(name=long_name)
+    assert "❌ Invalid input: Label name exceeds maximum length" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_label_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.add_label.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = create_label(name="error_label")
+    assert result == "❌ Failed to create label '@error_label' in Todoist. Check server logs for details."
+    assert "SECRET" not in result
 
 
 # =====================================================================

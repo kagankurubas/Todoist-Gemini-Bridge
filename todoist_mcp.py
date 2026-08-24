@@ -25,6 +25,7 @@ MAX_DUE_STRING_LENGTH = 150
 MAX_FILTER_QUERY_LENGTH = 500
 MAX_TASK_ID_LENGTH = 100
 MAX_COLOR_LENGTH = 50
+MAX_LABEL_NAME_LENGTH = 60
 
 
 def _get_api_client() -> TodoistAPI:
@@ -47,6 +48,14 @@ def _get_all_projects(api: TodoistAPI) -> list:
     for batch in api.get_projects():
         projects.extend(batch)
     return projects
+
+
+def _get_all_labels(api: TodoistAPI) -> list:
+    """Retrieves all labels from Todoist API across batches."""
+    labels = []
+    for batch in api.get_labels():
+        labels.extend(batch)
+    return labels
 
 
 def _find_project_id(api: TodoistAPI, project_name: str) -> Optional[str]:
@@ -146,8 +155,15 @@ def create_task(
             description="Task priority level from 1 (Normal) to 4 (Urgent).",
         ),
     ] = 1,
+    labels: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="List of label names to attach to the task (e.g. ['work', 'urgent'], optional).",
+        ),
+    ] = None,
 ) -> str:
-    """Creates a new task in Todoist with smart project resolution and natural language due dates.
+    """Creates a new task in Todoist with smart project resolution, labels, and natural language due dates.
 
     Args:
         content: Task title/content (must not be empty, max 500 chars).
@@ -155,6 +171,7 @@ def create_task(
         project_name: Target project name (max 120 chars, defaults to 'Gelen Kutusu').
         due_string: Natural language date string (e.g. 'tomorrow at 14:00', max 150 chars).
         priority: Priority integer strictly between 1 (normal) and 4 (urgent).
+        labels: Optional list of label strings to attach to the task.
     """
     clean_content = content.strip() if isinstance(content, str) else ""
     if not clean_content:
@@ -177,20 +194,32 @@ def create_task(
     if not isinstance(priority, int) or priority < 1 or priority > 4:
         return "❌ Invalid input: Priority must be an integer between 1 (Normal) and 4 (Urgent)."
 
+    clean_labels = None
+    if labels is not None:
+        if isinstance(labels, list):
+            clean_labels = [str(l).strip().lstrip("@") for l in labels if str(l).strip()]
+        else:
+            return "❌ Invalid input: Labels must be a list of strings."
+
     try:
         api = _get_api_client()
         project_id = _find_project_id(api, clean_project_name) if clean_project_name else None
 
-        task = api.add_task(
-            content=clean_content,
-            description=clean_description or None,
-            project_id=project_id,
-            due_string=clean_due_string or None,
-            priority=priority,
-        )
+        task_kwargs = {
+            "content": clean_content,
+            "description": clean_description or None,
+            "project_id": project_id,
+            "due_string": clean_due_string or None,
+            "priority": priority,
+        }
+        if clean_labels:
+            task_kwargs["labels"] = clean_labels
+
+        task = api.add_task(**task_kwargs)
 
         due_info = task.due.string if task.due and task.due.string else (clean_due_string or "Belirtilmedi")
         project_display = clean_project_name if clean_project_name else "Gelen Kutusu"
+        labels_display = f"\n• Etiketler: {', '.join(['@' + l for l in task.labels])}" if getattr(task, "labels", None) else ""
 
         return (
             f"✅ Görev başarıyla oluşturuldu!\n"
@@ -198,7 +227,8 @@ def create_task(
             f"• Başlık: {task.content}\n"
             f"• Proje: {project_display}\n"
             f"• Öncelik: p{task.priority}\n"
-            f"• Tarih / Tekrar: {due_info}\n"
+            f"• Tarih / Tekrar: {due_info}"
+            f"{labels_display}\n"
             f"• URL: {task.url}"
         )
     except Exception as e:
@@ -219,14 +249,14 @@ def list_tasks(
             default="today",
             min_length=1,
             max_length=MAX_FILTER_QUERY_LENGTH,
-            description="Todoist filter query (e.g. 'today', 'tomorrow', 'overdue', 'p1', 'all').",
+            description="Todoist filter query (e.g. 'today', 'tomorrow', 'overdue', 'p1', 'all', '@work').",
         ),
     ] = "today",
 ) -> str:
     """Lists open tasks in Todoist matching the specified filter query.
 
     Args:
-        filter_query: Todoist filter query (e.g. 'today', 'p1', 'overdue', max 500 chars).
+        filter_query: Todoist filter query (e.g. 'today', 'p1', 'overdue', '@work', max 500 chars).
     """
     clean_query = filter_query.strip() if isinstance(filter_query, str) else ""
     if not clean_query:
@@ -249,7 +279,8 @@ def list_tasks(
         for idx, task in enumerate(tasks, start=1):
             due_str = task.due.string if task.due and task.due.string else "Tarih yok"
             p_str = priority_labels.get(task.priority, f"p{task.priority}")
-            lines.append(f"{idx}. [{task.id}] {task.content}")
+            labels_str = f" [{' '.join(['@' + l for l in task.labels])}]" if getattr(task, "labels", None) else ""
+            lines.append(f"{idx}. [{task.id}] {task.content}{labels_str}")
             lines.append(f"   • Öncelik: {p_str}")
             lines.append(f"   • Tarih: {due_str}")
             if task.description:
@@ -307,6 +338,45 @@ def complete_task(
 
 
 @mcp.tool()
+def reopen_task(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to reopen/uncomplete (required).",
+        ),
+    ],
+) -> str:
+    """Reopens an existing completed Todoist task (makes it active again).
+
+    Args:
+        task_id: The ID of the completed Todoist task to reopen.
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        success = api.uncomplete_task(task_id=clean_task_id)
+        if success:
+            return f"🔄 Görev başarıyla yeniden açıldı (ID: {clean_task_id})."
+        else:
+            return f"⚠️ Görev yeniden açılamadı veya zaten açık olabilir (ID: {clean_task_id})."
+    except Exception as e:
+        logger.error(
+            "Failed to reopen task in Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to reopen task in Todoist (ID: {clean_task_id}). Check server logs for details."
+
+
+@mcp.tool()
 def update_task(
     task_id: Annotated[
         str,
@@ -357,8 +427,15 @@ def update_task(
             description="New priority level from 1 (Normal) to 4 (Urgent) (optional).",
         ),
     ] = None,
+    labels: Annotated[
+        Optional[list[str]],
+        Field(
+            default=None,
+            description="New list of label names for the task (replaces existing labels, optional).",
+        ),
+    ] = None,
 ) -> str:
-    """Updates an existing Todoist task's title, description, due date, priority, or moves it to another project.
+    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project.
 
     Args:
         task_id: The ID of the Todoist task to update (required).
@@ -367,6 +444,7 @@ def update_task(
         project_name: Name of target project to move task into.
         due_string: New natural language due date or schedule.
         priority: Priority integer between 1 (Normal) and 4 (Urgent).
+        labels: New list of label names for the task.
     """
     clean_task_id = str(task_id).strip() if task_id is not None else ""
     if not clean_task_id:
@@ -393,14 +471,22 @@ def update_task(
     if priority is not None and (not isinstance(priority, int) or priority < 1 or priority > 4):
         return "❌ Invalid input: Priority must be an integer between 1 (Normal) and 4 (Urgent)."
 
+    clean_labels = None
+    if labels is not None:
+        if isinstance(labels, list):
+            clean_labels = [str(l).strip().lstrip("@") for l in labels if str(l).strip()]
+        else:
+            return "❌ Invalid input: Labels must be a list of strings."
+
     if (
         clean_content is None
         and clean_description is None
         and clean_project_name is None
         and clean_due_string is None
         and priority is None
+        and clean_labels is None
     ):
-        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority) girin."
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels) girin."
 
     try:
         api = _get_api_client()
@@ -420,6 +506,9 @@ def update_task(
         if priority is not None:
             update_kwargs["priority"] = priority
             updated_fields.append(f"Öncelik: p{priority}")
+        if clean_labels is not None:
+            update_kwargs["labels"] = clean_labels
+            updated_fields.append(f"Etiketler: {', '.join(['@' + l for l in clean_labels]) if clean_labels else 'Temizlendi'}")
 
         if update_kwargs:
             api.update_task(task_id=clean_task_id, **update_kwargs)
@@ -489,7 +578,7 @@ def delete_task(
 
 @mcp.tool()
 def list_projects() -> str:
-    """Lists all user projects in Todoist with their names, IDs, and details."""
+    """Lists all user projects in Todoist with their hierarchy (nested/subprojects), names, IDs, and details."""
     try:
         api = _get_api_client()
         projects = _get_all_projects(api)
@@ -497,14 +586,41 @@ def list_projects() -> str:
         if not projects:
             return "ℹ️ Todoist hesabınızda herhangi bir proje bulunamadı."
 
+        # Map projects by parent_id for hierarchical display
+        children_map: dict[Optional[str], list] = {}
+        all_ids = {str(getattr(p, "id", "")) for p in projects}
+
+        for project in projects:
+            parent_id = str(project.parent_id) if getattr(project, "parent_id", None) else None
+            # If parent_id refers to a non-existent project in list, treat as root
+            if parent_id not in all_ids:
+                parent_id = None
+            children_map.setdefault(parent_id, []).append(project)
+
         lines = [f"📁 Mevcut Projeler (Toplam: {len(projects)}):", ""]
-        for idx, project in enumerate(projects, start=1):
-            is_inbox = " [Gelen Kutusu]" if getattr(project, "is_inbox_project", False) else ""
-            is_fav = " ⭐" if getattr(project, "is_favorite", False) else ""
-            color_info = f", Renk: {project.color}" if getattr(project, "color", None) else ""
-            lines.append(f"{idx}. [{project.id}] {project.name}{is_inbox}{is_fav}{color_info}")
-            if getattr(project, "url", None):
-                lines.append(f"   • URL: {project.url}")
+
+        def format_project_tree(parent_id: Optional[str], depth: int = 0, counter: list[int] = None):
+            if counter is None:
+                counter = [1]
+            for project in children_map.get(parent_id, []):
+                is_inbox = " [Gelen Kutusu]" if getattr(project, "is_inbox_project", False) else ""
+                is_fav = " ⭐" if getattr(project, "is_favorite", False) else ""
+                color_info = f", Renk: {project.color}" if getattr(project, "color", None) else ""
+                
+                if depth == 0:
+                    prefix = f"{counter[0]}. "
+                    counter[0] += 1
+                else:
+                    prefix = "   " * depth + "└── "
+
+                lines.append(f"{prefix}[{project.id}] {project.name}{is_inbox}{is_fav}{color_info}")
+                if getattr(project, "url", None):
+                    url_indent = "   " * (depth + 1)
+                    lines.append(f"{url_indent}• URL: {project.url}")
+
+                format_project_tree(str(project.id), depth + 1, counter)
+
+        format_project_tree(None, depth=0)
 
         return "\n".join(lines).strip()
     except Exception as e:
@@ -526,6 +642,14 @@ def create_project(
             description="The name of the new project (required).",
         ),
     ],
+    parent_project_name_or_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="Parent project name or ID to create this project as a nested subproject (optional).",
+        ),
+    ] = None,
     color: Annotated[
         Optional[str],
         Field(
@@ -535,10 +659,11 @@ def create_project(
         ),
     ] = None,
 ) -> str:
-    """Creates a new project in Todoist.
+    """Creates a new project or subproject in Todoist.
 
     Args:
         name: Name of the project (must not be empty, max 120 chars).
+        parent_project_name_or_id: Optional parent project name or ID to create as a nested subproject.
         color: Optional color name (e.g. 'berry_red', 'sky_blue', 'mint_green').
     """
     clean_name = name.strip() if isinstance(name, str) else ""
@@ -547,6 +672,10 @@ def create_project(
     if len(clean_name) > MAX_PROJECT_NAME_LENGTH:
         return f"❌ Invalid input: Project name exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
 
+    clean_parent = parent_project_name_or_id.strip() if isinstance(parent_project_name_or_id, str) else None
+    if clean_parent and len(clean_parent) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Parent project identifier exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
     clean_color = color.strip().lower() if isinstance(color, str) else None
     if clean_color and len(clean_color) > MAX_COLOR_LENGTH:
         return f"❌ Invalid input: Color name exceeds maximum length of {MAX_COLOR_LENGTH} characters."
@@ -554,6 +683,15 @@ def create_project(
     try:
         api = _get_api_client()
         kwargs = {}
+        parent_display = ""
+
+        if clean_parent:
+            parent_id, parent_name = _resolve_project(api, clean_parent)
+            if not parent_id:
+                return f"⚠️ Belirtilen üst proje bulunamadı: '{clean_parent}'."
+            kwargs["parent_id"] = parent_id
+            parent_display = f"\n• Üst Proje: '{parent_name}' (ID: {parent_id})"
+
         if clean_color:
             kwargs["color"] = clean_color
 
@@ -566,6 +704,7 @@ def create_project(
             f"✅ Proje başarıyla oluşturuldu!\n"
             f"• ID: {project.id}\n"
             f"• İsim: {project.name}"
+            f"{parent_display}"
             f"{color_str}"
             f"{url_str}"
         )
@@ -623,6 +762,93 @@ def delete_project(
             exc_info=False,
         )
         return f"❌ Failed to delete project '{clean_identifier}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def list_labels() -> str:
+    """Lists all user labels in Todoist with their names, IDs, and color information."""
+    try:
+        api = _get_api_client()
+        labels = _get_all_labels(api)
+
+        if not labels:
+            return "ℹ️ Todoist hesabınızda herhangi bir etiket bulunamadı."
+
+        lines = [f"🏷️ Mevcut Etiketler (Toplam: {len(labels)}):", ""]
+        for idx, label in enumerate(labels, start=1):
+            is_fav = " ⭐" if getattr(label, "is_favorite", False) else ""
+            color_info = f", Renk: {label.color}" if getattr(label, "color", None) else ""
+            lines.append(f"{idx}. [{label.id}] @{label.name}{is_fav}{color_info}")
+
+        return "\n".join(lines).strip()
+    except Exception as e:
+        logger.error(
+            "Failed to list labels from Todoist (error_type=%s)",
+            type(e).__name__,
+            exc_info=False,
+        )
+        return "❌ Failed to list labels from Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def create_label(
+    name: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_LABEL_NAME_LENGTH,
+            description="The name of the new label (required, e.g. 'work', 'focus').",
+        ),
+    ],
+    color: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_COLOR_LENGTH,
+            description="Color name for the label icon (e.g. 'berry_red', 'mint_green', 'teal', optional).",
+        ),
+    ] = None,
+) -> str:
+    """Creates a new label in Todoist.
+
+    Args:
+        name: Name of the label (must not be empty, max 60 chars).
+        color: Optional color name (e.g. 'berry_red', 'sky_blue', 'mint_green').
+    """
+    clean_name = name.strip().lstrip("@") if isinstance(name, str) else ""
+    if not clean_name:
+        return "❌ Invalid input: Label name cannot be empty or whitespace."
+    if len(clean_name) > MAX_LABEL_NAME_LENGTH:
+        return f"❌ Invalid input: Label name exceeds maximum length of {MAX_LABEL_NAME_LENGTH} characters."
+
+    clean_color = color.strip().lower() if isinstance(color, str) else None
+    if clean_color and len(clean_color) > MAX_COLOR_LENGTH:
+        return f"❌ Invalid input: Color name exceeds maximum length of {MAX_COLOR_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        kwargs = {}
+        if clean_color:
+            kwargs["color"] = clean_color
+
+        label = api.add_label(name=clean_name, **kwargs)
+
+        color_str = f"\n• Renk: {label.color}" if getattr(label, "color", None) else ""
+
+        return (
+            f"✅ Etiket başarıyla oluşturuldu!\n"
+            f"• ID: {label.id}\n"
+            f"• İsim: @{label.name}"
+            f"{color_str}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to create label in Todoist (name=%s, error_type=%s)",
+            clean_name,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to create label '@{clean_name}' in Todoist. Check server logs for details."
 
 
 if __name__ == "__main__":
