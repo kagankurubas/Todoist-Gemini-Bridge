@@ -6,6 +6,7 @@ All tests use mocks to ensure zero network calls and deterministic results.
 from unittest.mock import MagicMock, patch
 import pytest
 from todoist_mcp import (
+    MAX_COLOR_LENGTH,
     MAX_CONTENT_LENGTH,
     MAX_DESCRIPTION_LENGTH,
     MAX_DUE_STRING_LENGTH,
@@ -13,19 +14,27 @@ from todoist_mcp import (
     MAX_PROJECT_NAME_LENGTH,
     MAX_TASK_ID_LENGTH,
     _find_project_id,
+    _resolve_project,
     complete_task,
+    create_project,
     create_task,
+    delete_project,
+    delete_task,
+    list_projects,
     list_tasks,
+    update_task,
 )
 
 
 class MockProject:
     """Mock Todoist project object."""
 
-    def __init__(self, project_id: str, name: str, is_inbox: bool = False):
+    def __init__(self, project_id: str, name: str, is_inbox: bool = False, color: str = None, url: str = None):
         self.id = project_id
         self.name = name
         self.is_inbox_project = is_inbox
+        self.color = color
+        self.url = url or f"https://app.todoist.com/app/project/{project_id}"
 
 
 class MockTask:
@@ -153,7 +162,6 @@ def test_create_task_sanitizes_exception_and_logs_cleanly(mock_get_client, caplo
     mock_api = MagicMock()
     mock_get_client.return_value = mock_api
     mock_api.get_projects.return_value = []
-    # Exception containing a sensitive token or Authorization header
     mock_api.add_task.side_effect = Exception(
         "TODOIST_API_TOKEN=SUPER_SECRET_TOKEN_123 failed Authorization: Bearer SUPER_SECRET_TOKEN_123"
     )
@@ -162,10 +170,8 @@ def test_create_task_sanitizes_exception_and_logs_cleanly(mock_get_client, caplo
         result = create_task(content="Test Task")
 
     assert result == "❌ Todoist task creation failed. Check server logs for details."
-    # Verify secret is NEVER exposed to client
     assert "SUPER_SECRET_TOKEN_123" not in result
     assert "Bearer" not in result
-    # Verify secret is NEVER exposed to captured logs
     assert "SUPER_SECRET_TOKEN_123" not in caplog.text
     assert "Bearer" not in caplog.text
 
@@ -283,18 +289,222 @@ def test_complete_task_sanitizes_exception_and_logs_cleanly(mock_get_client, cap
     assert "SUPER_SECRET_TOKEN_123" not in caplog.text
 
 
+# =====================================================================
+# UPDATE_TASK TESTS
+# =====================================================================
+
 @patch("todoist_mcp._get_api_client")
-def test_find_project_id_logs_cleanly_on_exception(mock_get_client, caplog):
+def test_update_task_success(mock_get_client):
     mock_api = MagicMock()
-    mock_api.get_projects.side_effect = Exception(
-        "TODOIST_API_TOKEN=SUPER_SECRET_TOKEN_123 failed Authorization: Bearer SUPER_SECRET_TOKEN_123"
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_99", "İş")
+    mock_api.get_projects.return_value = [[mock_project]]
+
+    result = update_task(
+        task_id="task_123",
+        content="Yeni Başlık",
+        description="Yeni Açıklama",
+        project_name="İş",
+        due_string="yarın 15:00",
+        priority=3,
     )
 
-    with caplog.at_level("INFO"):
-        res = _find_project_id(mock_api, "Test Project")
+    assert "✅ Görev başarıyla güncellendi (ID: task_123)!" in result
+    assert "Başlık: 'Yeni Başlık'" in result
+    assert "Açıklama: 'Yeni Açıklama'" in result
+    assert "Tarih: 'yarın 15:00'" in result
+    assert "Öncelik: p3" in result
+    assert "Hedef Proje: 'İş' (ID: proj_99)" in result
 
-    assert res is None
-    assert "SUPER_SECRET_TOKEN_123" not in caplog.text
+    mock_api.update_task.assert_called_once_with(
+        task_id="task_123",
+        content="Yeni Başlık",
+        description="Yeni Açıklama",
+        due_string="yarın 15:00",
+        priority=3,
+    )
+    mock_api.move_task.assert_called_once_with(task_id="task_123", project_id="proj_99")
+
+
+def test_update_task_no_fields_provided():
+    result = update_task(task_id="task_123")
+    assert "⚠️ Güncellenecek hiçbir alan belirtilmedi" in result
+
+
+def test_update_task_invalid_priority():
+    result = update_task(task_id="task_123", priority=5)
+    assert "❌ Invalid input: Priority must be an integer between 1" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_task_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.update_task.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = update_task(task_id="task_err", content="Updated Content")
+    assert result == "❌ Failed to update task in Todoist (ID: task_err). Check server logs for details."
+    assert "SECRET" not in result
+
+
+# =====================================================================
+# DELETE_TASK TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_task_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.delete_task.return_value = True
+
+    result = delete_task(task_id="task_to_del")
+    assert "🗑️ Görev kalıcı olarak silindi (ID: task_to_del)." in result
+    mock_api.delete_task.assert_called_once_with(task_id="task_to_del")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_task_unsuccessful(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.delete_task.return_value = False
+
+    result = delete_task(task_id="task_missing")
+    assert "⚠️ Görev silinemedi (ID: task_missing)." in result
+
+
+def test_delete_task_empty_id():
+    result = delete_task(task_id="   ")
+    assert "❌ Invalid input: Task ID cannot be empty" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_task_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.delete_task.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = delete_task(task_id="task_err")
+    assert result == "❌ Failed to delete task in Todoist (ID: task_err). Check server logs for details."
+    assert "SECRET" not in result
+
+
+# =====================================================================
+# CREATE_PROJECT TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_create_project_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.add_project.return_value = MockProject("proj_new_1", "Yeni Proje", color="berry_red")
+
+    result = create_project(name="Yeni Proje", color="berry_red")
+    assert "✅ Proje başarıyla oluşturuldu!" in result
+    assert "ID: proj_new_1" in result
+    assert "İsim: Yeni Proje" in result
+    assert "Renk: berry_red" in result
+    mock_api.add_project.assert_called_once_with(name="Yeni Proje", color="berry_red")
+
+
+def test_create_project_empty_name():
+    result = create_project(name="   ")
+    assert "❌ Invalid input: Project name cannot be empty" in result
+
+
+def test_create_project_name_too_long():
+    long_name = "N" * (MAX_PROJECT_NAME_LENGTH + 1)
+    result = create_project(name=long_name)
+    assert "❌ Invalid input: Project name exceeds maximum length" in result
+
+
+def test_create_project_color_too_long():
+    long_color = "C" * (MAX_COLOR_LENGTH + 1)
+    result = create_project(name="Valid Project", color=long_color)
+    assert "❌ Invalid input: Color name exceeds maximum length" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_project_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.add_project.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = create_project(name="ErrProj")
+    assert result == "❌ Failed to create project 'ErrProj' in Todoist. Check server logs for details."
+    assert "SECRET" not in result
+
+
+# =====================================================================
+# DELETE_PROJECT TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_project_by_id_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_123", "Eski Proje")
+    mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.delete_project.return_value = True
+
+    result = delete_project(project_name_or_id="proj_123")
+    assert "🗑️ Proje başarıyla silindi: 'Eski Proje' (ID: proj_123)." in result
+    mock_api.delete_project.assert_called_once_with(project_id="proj_123")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_project_by_name_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_456", "Silinecek Proje")
+    mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.delete_project.return_value = True
+
+    result = delete_project(project_name_or_id="Silinecek Proje")
+    assert "🗑️ Proje başarıyla silindi: 'Silinecek Proje' (ID: proj_456)." in result
+    mock_api.delete_project.assert_called_once_with(project_id="proj_456")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_project_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_projects.return_value = [[]]
+
+    result = delete_project(project_name_or_id="Nonexistent")
+    assert "⚠️ Silinecek proje bulunamadı: 'Nonexistent'." in result
+
+
+def test_delete_project_empty_identifier():
+    result = delete_project(project_name_or_id="   ")
+    assert "❌ Invalid input: Project identifier cannot be empty" in result
+
+
+# =====================================================================
+# LIST_PROJECTS TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_list_projects_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    p1 = MockProject("p1", "Gelen Kutusu", is_inbox=True)
+    p2 = MockProject("p2", "İş", color="berry_red")
+    mock_api.get_projects.return_value = [[p1, p2]]
+
+    result = list_projects()
+    assert "📁 Mevcut Projeler (Toplam: 2):" in result
+    assert "1. [p1] Gelen Kutusu [Gelen Kutusu]" in result
+    assert "2. [p2] İş, Renk: berry_red" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_list_projects_empty(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_projects.return_value = [[]]
+
+    result = list_projects()
+    assert "ℹ️ Todoist hesabınızda herhangi bir proje bulunamadı." in result
 
 
 # =====================================================================
@@ -311,9 +521,7 @@ def test_find_project_id_exact_and_case_insensitive():
         ]
     ]
 
-    # Exact match
     assert _find_project_id(mock_api, "Odak & Gelişim") == "p2"
-    # Case insensitive
     assert _find_project_id(mock_api, "odak & gelişim") == "p2"
     assert _find_project_id(mock_api, "KİŞİSEL PROJELER") == "p3"
 
@@ -342,5 +550,4 @@ def test_find_project_id_api_failure_fallback():
     mock_api = MagicMock()
     mock_api.get_projects.side_effect = RuntimeError("Network timeout")
 
-    # Gracefully returns None instead of raising
     assert _find_project_id(mock_api, "Nonexistent") is None

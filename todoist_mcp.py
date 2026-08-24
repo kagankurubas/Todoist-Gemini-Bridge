@@ -24,6 +24,7 @@ MAX_PROJECT_NAME_LENGTH = 120
 MAX_DUE_STRING_LENGTH = 150
 MAX_FILTER_QUERY_LENGTH = 500
 MAX_TASK_ID_LENGTH = 100
+MAX_COLOR_LENGTH = 50
 
 
 def _get_api_client() -> TodoistAPI:
@@ -40,42 +41,66 @@ def _normalize(text: str) -> str:
     return text.strip().lower().replace("ı", "i").replace("İ", "i").replace("i̇", "i")
 
 
+def _get_all_projects(api: TodoistAPI) -> list:
+    """Retrieves all projects from Todoist API across batches."""
+    projects = []
+    for batch in api.get_projects():
+        projects.extend(batch)
+    return projects
+
+
 def _find_project_id(api: TodoistAPI, project_name: str) -> Optional[str]:
     """Resolves matching Todoist project ID by project name."""
-    normalized_target = _normalize(project_name)
+    project_id, _ = _resolve_project(api, project_name)
+    return project_id
 
-    inbox_aliases = ["gelen kutusu", "inbox", "gelenkutusu", "inbox/gelen kutusu"]
-    is_inbox_query = normalized_target in inbox_aliases
+
+def _resolve_project(api: TodoistAPI, name_or_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Resolves project ID and display name from either a project ID or project name.
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: (project_id, project_name) or (None, None)
+    """
+    clean_identifier = name_or_id.strip() if isinstance(name_or_id, str) else ""
+    if not clean_identifier:
+        return None, None
 
     try:
-        projects = []
-        for batch in api.get_projects():
-            projects.extend(batch)
+        projects = _get_all_projects(api)
     except Exception as e:
         logger.error(
             "Failed to retrieve projects list for project resolution (error_type=%s)",
             type(e).__name__,
             exc_info=False,
         )
-        return None
+        return None, None
 
-    if is_inbox_query:
+    # 1. Direct ID match
+    for project in projects:
+        if str(getattr(project, "id", "")) == clean_identifier:
+            return str(project.id), getattr(project, "name", "Bilinmeyen Proje")
+
+    # 2. Inbox query alias check
+    normalized_target = _normalize(clean_identifier)
+    inbox_aliases = ["gelen kutusu", "inbox", "gelenkutusu", "inbox/gelen kutusu"]
+    if normalized_target in inbox_aliases:
         for project in projects:
             if getattr(project, "is_inbox_project", False):
-                return project.id
+                return str(project.id), getattr(project, "name", "Gelen Kutusu")
             if _normalize(getattr(project, "name", "")) in inbox_aliases:
-                return project.id
-        return None
+                return str(project.id), getattr(project, "name", "Gelen Kutusu")
 
+    # 3. Exact name match
     for project in projects:
         if _normalize(getattr(project, "name", "")) == normalized_target:
-            return project.id
+            return str(project.id), getattr(project, "name", "")
 
+    # 4. Partial name match
     for project in projects:
         if normalized_target in _normalize(getattr(project, "name", "")):
-            return project.id
+            return str(project.id), getattr(project, "name", "")
 
-    return None
+    return None, None
 
 
 @mcp.tool()
@@ -253,7 +278,7 @@ def complete_task(
         ),
     ],
 ) -> str:
-    """Marks an existing Todoist task as completed. This modifies the user's Todoist data.
+    """Marks an existing Todoist task as completed.
 
     Args:
         task_id: The ID of the Todoist task to mark as completed (max 100 chars).
@@ -279,6 +304,325 @@ def complete_task(
             exc_info=False,
         )
         return f"❌ Failed to complete task in Todoist (ID: {clean_task_id}). Check server logs for details."
+
+
+@mcp.tool()
+def update_task(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to update (required).",
+        ),
+    ],
+    content: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_CONTENT_LENGTH,
+            description="New title/content for the task (optional).",
+        ),
+    ] = None,
+    description: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_DESCRIPTION_LENGTH,
+            description="New description or notes for the task (optional).",
+        ),
+    ] = None,
+    project_name: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="Target project name to move the task into (optional).",
+        ),
+    ] = None,
+    due_string: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_DUE_STRING_LENGTH,
+            description="New natural language due date/time (e.g. 'tomorrow at 15:00', 'no date', optional).",
+        ),
+    ] = None,
+    priority: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            ge=1,
+            le=4,
+            description="New priority level from 1 (Normal) to 4 (Urgent) (optional).",
+        ),
+    ] = None,
+) -> str:
+    """Updates an existing Todoist task's title, description, due date, priority, or moves it to another project.
+
+    Args:
+        task_id: The ID of the Todoist task to update (required).
+        content: New title/content for the task.
+        description: New description or notes for the task.
+        project_name: Name of target project to move task into.
+        due_string: New natural language due date or schedule.
+        priority: Priority integer between 1 (Normal) and 4 (Urgent).
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    clean_content = content.strip() if isinstance(content, str) else None
+    if clean_content is not None and len(clean_content) > MAX_CONTENT_LENGTH:
+        return f"❌ Invalid input: Task content exceeds maximum length of {MAX_CONTENT_LENGTH} characters."
+
+    clean_description = description.strip() if isinstance(description, str) else None
+    if clean_description is not None and len(clean_description) > MAX_DESCRIPTION_LENGTH:
+        return f"❌ Invalid input: Task description exceeds maximum length of {MAX_DESCRIPTION_LENGTH} characters."
+
+    clean_project_name = project_name.strip() if isinstance(project_name, str) else None
+    if clean_project_name is not None and len(clean_project_name) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project name exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    clean_due_string = due_string.strip() if isinstance(due_string, str) else None
+    if clean_due_string is not None and len(clean_due_string) > MAX_DUE_STRING_LENGTH:
+        return f"❌ Invalid input: Due date string exceeds maximum length of {MAX_DUE_STRING_LENGTH} characters."
+
+    if priority is not None and (not isinstance(priority, int) or priority < 1 or priority > 4):
+        return "❌ Invalid input: Priority must be an integer between 1 (Normal) and 4 (Urgent)."
+
+    if (
+        clean_content is None
+        and clean_description is None
+        and clean_project_name is None
+        and clean_due_string is None
+        and priority is None
+    ):
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority) girin."
+
+    try:
+        api = _get_api_client()
+        updated_fields = []
+
+        # 1. Update task attributes if provided
+        update_kwargs = {}
+        if clean_content is not None:
+            update_kwargs["content"] = clean_content
+            updated_fields.append(f"Başlık: '{clean_content}'")
+        if clean_description is not None:
+            update_kwargs["description"] = clean_description
+            updated_fields.append(f"Açıklama: '{clean_description}'")
+        if clean_due_string is not None:
+            update_kwargs["due_string"] = clean_due_string
+            updated_fields.append(f"Tarih: '{clean_due_string}'")
+        if priority is not None:
+            update_kwargs["priority"] = priority
+            updated_fields.append(f"Öncelik: p{priority}")
+
+        if update_kwargs:
+            api.update_task(task_id=clean_task_id, **update_kwargs)
+
+        # 2. Move task to target project if project_name provided
+        if clean_project_name is not None:
+            project_id = _find_project_id(api, clean_project_name)
+            if not project_id:
+                return f"⚠️ Görev güncellendi fakat hedef proje bulunamadı: '{clean_project_name}'."
+            api.move_task(task_id=clean_task_id, project_id=project_id)
+            updated_fields.append(f"Hedef Proje: '{clean_project_name}' (ID: {project_id})")
+
+        changes_summary = "\n".join([f"• {field}" for field in updated_fields])
+        return (
+            f"✅ Görev başarıyla güncellendi (ID: {clean_task_id})!\n"
+            f"Yapılan değişiklikler:\n"
+            f"{changes_summary}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to update task in Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to update task in Todoist (ID: {clean_task_id}). Check server logs for details."
+
+
+@mcp.tool()
+def delete_task(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to delete permanently (required).",
+        ),
+    ],
+) -> str:
+    """Permanently deletes a task from Todoist by ID.
+
+    Args:
+        task_id: The ID of the Todoist task to delete permanently.
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        success = api.delete_task(task_id=clean_task_id)
+        if success:
+            return f"🗑️ Görev kalıcı olarak silindi (ID: {clean_task_id})."
+        else:
+            return f"⚠️ Görev silinemedi (ID: {clean_task_id}). Görev zaten silinmiş veya bulunamıyor olabilir."
+    except Exception as e:
+        logger.error(
+            "Failed to delete task in Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to delete task in Todoist (ID: {clean_task_id}). Check server logs for details."
+
+
+@mcp.tool()
+def list_projects() -> str:
+    """Lists all user projects in Todoist with their names, IDs, and details."""
+    try:
+        api = _get_api_client()
+        projects = _get_all_projects(api)
+
+        if not projects:
+            return "ℹ️ Todoist hesabınızda herhangi bir proje bulunamadı."
+
+        lines = [f"📁 Mevcut Projeler (Toplam: {len(projects)}):", ""]
+        for idx, project in enumerate(projects, start=1):
+            is_inbox = " [Gelen Kutusu]" if getattr(project, "is_inbox_project", False) else ""
+            is_fav = " ⭐" if getattr(project, "is_favorite", False) else ""
+            color_info = f", Renk: {project.color}" if getattr(project, "color", None) else ""
+            lines.append(f"{idx}. [{project.id}] {project.name}{is_inbox}{is_fav}{color_info}")
+            if getattr(project, "url", None):
+                lines.append(f"   • URL: {project.url}")
+
+        return "\n".join(lines).strip()
+    except Exception as e:
+        logger.error(
+            "Failed to list projects from Todoist (error_type=%s)",
+            type(e).__name__,
+            exc_info=False,
+        )
+        return "❌ Failed to list projects from Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def create_project(
+    name: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="The name of the new project (required).",
+        ),
+    ],
+    color: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_COLOR_LENGTH,
+            description="Color name for the project icon (e.g. 'berry_red', 'charcoal', 'teal', optional).",
+        ),
+    ] = None,
+) -> str:
+    """Creates a new project in Todoist.
+
+    Args:
+        name: Name of the project (must not be empty, max 120 chars).
+        color: Optional color name (e.g. 'berry_red', 'sky_blue', 'mint_green').
+    """
+    clean_name = name.strip() if isinstance(name, str) else ""
+    if not clean_name:
+        return "❌ Invalid input: Project name cannot be empty or whitespace."
+    if len(clean_name) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project name exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    clean_color = color.strip().lower() if isinstance(color, str) else None
+    if clean_color and len(clean_color) > MAX_COLOR_LENGTH:
+        return f"❌ Invalid input: Color name exceeds maximum length of {MAX_COLOR_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        kwargs = {}
+        if clean_color:
+            kwargs["color"] = clean_color
+
+        project = api.add_project(name=clean_name, **kwargs)
+
+        color_str = f"\n• Renk: {project.color}" if getattr(project, "color", None) else ""
+        url_str = f"\n• URL: {project.url}" if getattr(project, "url", None) else ""
+
+        return (
+            f"✅ Proje başarıyla oluşturuldu!\n"
+            f"• ID: {project.id}\n"
+            f"• İsim: {project.name}"
+            f"{color_str}"
+            f"{url_str}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to create project in Todoist (name=%s, error_type=%s)",
+            clean_name,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to create project '{clean_name}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def delete_project(
+    project_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="The Todoist Project ID or Project Name to delete (required).",
+        ),
+    ],
+) -> str:
+    """Deletes a project from Todoist by either its ID or project name.
+
+    Args:
+        project_name_or_id: The ID or name of the project to delete.
+    """
+    clean_identifier = str(project_name_or_id).strip() if project_name_or_id is not None else ""
+    if not clean_identifier:
+        return "❌ Invalid input: Project identifier cannot be empty or whitespace."
+    if len(clean_identifier) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project identifier exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        project_id, project_name = _resolve_project(api, clean_identifier)
+
+        if not project_id:
+            return f"⚠️ Silinecek proje bulunamadı: '{clean_identifier}'."
+
+        success = api.delete_project(project_id=project_id)
+        display_name = f"'{project_name}' (ID: {project_id})" if project_name else f"ID: {project_id}"
+
+        if success:
+            return f"🗑️ Proje başarıyla silindi: {display_name}."
+        else:
+            return f"⚠️ Proje silinemedi: {display_name}."
+    except Exception as e:
+        logger.error(
+            "Failed to delete project in Todoist (identifier=%s, error_type=%s)",
+            clean_identifier,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to delete project '{clean_identifier}' in Todoist. Check server logs for details."
 
 
 if __name__ == "__main__":

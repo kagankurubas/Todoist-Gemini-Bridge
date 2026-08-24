@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Pydantic-v2-e92063?logo=pydantic&logoColor=white" alt="Pydantic" />
   <img src="https://img.shields.io/badge/Todoist_API-v1-e44332?logo=todoist&logoColor=white" alt="Todoist API" />
   <img src="https://img.shields.io/badge/Google_Tasks-OAuth_2.0-4285F4?logo=google&logoColor=white" alt="Google Tasks API" />
-  <img src="https://img.shields.io/badge/Tests-65%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
+  <img src="https://img.shields.io/badge/Tests-83%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
@@ -44,7 +44,7 @@ flowchart TD
     end
 
     subgraph Gateways["🚀 Gateways & Interfaces"]
-        C1["🤖 FastMCP Server (todoist_mcp.py)\n[create_task, list_tasks, complete_task]"]
+        C1["🤖 FastMCP Server (todoist_mcp.py)\n[create/list/complete/update/delete task & project tools]"]
         C2["⚡ FastAPI Server (app.py)\n[Timing-Safe X-Bridge-Token Auth]"]
         C3["🔄 Sync Worker (sync_worker.py)\n[OAuth 2.0 Auto-Delete]"]
         C4["🖥️ Standalone CLI (main.py / send_to_bridge.py)"]
@@ -82,7 +82,7 @@ Todoist Gemini Bridge is an open-source Python automation toolkit and local **Mo
 
 ### 🌟 Key Features
 
-- **🤖 Model Context Protocol (MCP) Server (`todoist_mcp.py`):** FastMCP server over STDIO for Claude Desktop with tools to create (`create_task`), query/filter (`list_tasks`), and complete (`complete_task`) Todoist tasks with sanitized error handling.
+- **🤖 Model Context Protocol (MCP) Server (`todoist_mcp.py`):** FastMCP server over STDIO for Claude Desktop with comprehensive task (`create_task`, `list_tasks`, `complete_task`, `update_task`, `delete_task`) and project (`create_project`, `delete_project`, `list_projects`) management tools with sanitized error handling.
 - **🛡️ Pydantic & Batch Validation:** Strict type-safe schema verification with a 50-task maximum batch limit for both dictionary and list payloads.
 - **📱 Google Tasks → Todoist Sync Worker (`sync_worker.py`):** OAuth 2.0 daemon that synchronizes tasks from Google Tasks, parses tags (`#Project`, `p[1-4]`, `@Date`), pushes them to Todoist, and cleans up Google Tasks.
 - **🎯 Smart Project Resolution:** Dynamically maps human-readable project names (case-insensitive with Unicode normalization) to Todoist `project_id`. Defaults safely to `Inbox` if not found.
@@ -106,7 +106,7 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Direct Todoist CLI runner & table formatter
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Schema
 ├── tasks_sample.json       # Sample task template
-├── tests/                  # Pytest test suite (65 unit & integration tests)
+├── tests/                  # Pytest test suite (83 unit & integration tests)
 ├── Dockerfile              # Docker container (runs sync_worker.py by default)
 ├── .dockerignore           # Excluded files for Docker build context
 ├── requirements.txt        # Python dependencies
@@ -262,7 +262,7 @@ Todoist Gemini Bridge, yapay zeka modelleri (Claude Desktop, Gemini, ChatGPT), o
 
 ### 🌟 Öne Çıkan Özellikler
 
-- **🤖 Model Context Protocol (MCP) Sunucusu (`todoist_mcp.py`):** Claude Desktop için FastMCP mimarisiyle yerel STDIO üzerinden çalışan; görev oluşturma (`create_task`), listeleme (`list_tasks`) ve tamamlama (`complete_task`) araçları.
+- **🤖 Model Context Protocol (MCP) Sunucusu (`todoist_mcp.py`):** Claude Desktop için FastMCP mimarisiyle yerel STDIO üzerinden çalışan; görev (`create_task`, `list_tasks`, `complete_task`, `update_task`, `delete_task`) ve proje (`create_project`, `delete_project`, `list_projects`) yönetim araçları.
 - **🛡️ Pydantic ile Doğrulama & Toplu İşlem Limiti:** Tekil veya toplu görev verilerinin tiplerini doğrular; tek seferde en fazla 50 görev sınırını hem liste hem sözlük formatında zorunlu kılar.
 - **📱 Google Tasks → Todoist Senkronizasyonu (`sync_worker.py`):** Google Tasks'teki görevleri okur, etiketleri (`#Proje`, `p[1-4]`, `@Tarih`) ayrıştırır, Todoist'e aktarır ve aktarılanları siler.
 - **🎯 Akıllı Proje Eşleme:** Proje isimlerini (`project_name`) büyük/küçük harf duyarsız ve Türkçe karakter uyumlu olarak dinamik Todoist proje ID'lerine eşler; bulunamazsa güvenli bir şekilde `Gelen Kutusu`na (Inbox) yönlendirir.
@@ -285,7 +285,7 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Doğrudan Todoist CLI çalıştırıcısı ve tablo formatlayıcı
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Şeması
 ├── tasks_sample.json       # Örnek görev şablonu
-├── tests/                  # Pytest test paketi (65 birim ve entegrasyon testi)
+├── tests/                  # Pytest test paketi (83 birim ve entegrasyon testi)
 ├── Dockerfile              # Docker konteyner tanımı (varsayılan: sync_worker.py)
 ├── .dockerignore           # Docker derleme bağlamı hariç tutma listesi
 ├── requirements.txt        # Python bağımlılıkları
@@ -432,7 +432,7 @@ python send_to_bridge.py --file tasks_sample.json
 <a name="tests"></a>
 ## 🧪 Testing / Testleri Çalıştırma
 
-Projede 65 adet birim ve entegrasyon testi yer almaktadır:
+Projede 83 adet birim ve entegrasyon testi yer almaktadır:
 
 ```bash
 # Tüm testleri çalıştırmak için:
