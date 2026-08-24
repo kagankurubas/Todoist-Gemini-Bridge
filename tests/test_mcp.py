@@ -7,25 +7,36 @@ from unittest.mock import MagicMock, patch
 import pytest
 from todoist_mcp import (
     MAX_COLOR_LENGTH,
+    MAX_COMMENT_LENGTH,
     MAX_CONTENT_LENGTH,
     MAX_DESCRIPTION_LENGTH,
     MAX_DUE_STRING_LENGTH,
     MAX_FILTER_QUERY_LENGTH,
     MAX_LABEL_NAME_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
+    MAX_SECTION_NAME_LENGTH,
     MAX_TASK_ID_LENGTH,
     _find_project_id,
+    _resolve_label,
     _resolve_project,
+    _resolve_section,
+    add_comment,
     complete_task,
     create_label,
     create_project,
+    create_section,
     create_task,
+    delete_label,
     delete_project,
+    delete_section,
     delete_task,
+    get_comments,
     list_labels,
     list_projects,
+    list_sections,
     list_tasks,
     reopen_task,
+    update_label,
     update_task,
 )
 
@@ -60,6 +71,26 @@ class MockLabel:
         self.is_favorite = is_favorite
 
 
+class MockSection:
+    """Mock Todoist section object."""
+
+    def __init__(self, section_id: str, name: str, project_id: str = "proj_default", order: int = 1):
+        self.id = section_id
+        self.name = name
+        self.project_id = project_id
+        self.order = order
+
+
+class MockComment:
+    """Mock Todoist comment object."""
+
+    def __init__(self, comment_id: str, content: str, task_id: str = "task_default", posted_at: str = "2026-08-24T12:00:00Z"):
+        self.id = comment_id
+        self.content = content
+        self.task_id = task_id
+        self.posted_at = posted_at
+
+
 class MockTask:
     """Mock Todoist task object."""
 
@@ -72,6 +103,7 @@ class MockTask:
         description: str = "",
         url: str = None,
         labels: list = None,
+        section_id: str = None,
     ):
         self.id = task_id
         self.content = content
@@ -80,6 +112,7 @@ class MockTask:
         self.description = description
         self.url = url or f"https://app.todoist.com/app/task/{task_id}"
         self.labels = labels or []
+        self.section_id = section_id
 
 
 # =====================================================================
@@ -92,19 +125,23 @@ def test_create_task_success(mock_get_client):
     mock_get_client.return_value = mock_api
 
     mock_project = MockProject("proj_100", "Odak & Gelişim")
+    mock_section = MockSection("sec_200", "Acil İşler", project_id="proj_100")
     mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.get_sections.return_value = [[mock_section]]
     mock_api.add_task.return_value = MockTask(
         task_id="task_001",
         content="Read 10 pages",
         priority=2,
         due_string="tomorrow at 10:00",
         labels=["kitap", "odak"],
+        section_id="sec_200",
     )
 
     result = create_task(
         content="Read 10 pages",
         description="Daily habit",
         project_name="Odak & Gelişim",
+        section_name_or_id="Acil İşler",
         due_string="tomorrow at 10:00",
         priority=2,
         labels=["@kitap", "odak"],
@@ -114,16 +151,34 @@ def test_create_task_success(mock_get_client):
     assert "ID: task_001" in result
     assert "Başlık: Read 10 pages" in result
     assert "Proje: Odak & Gelişim" in result
+    assert "Bölüm: Acil İşler (ID: sec_200)" in result
     assert "Öncelik: p2" in result
     assert "Etiketler: @kitap, @odak" in result
     mock_api.add_task.assert_called_once_with(
         content="Read 10 pages",
         description="Daily habit",
         project_id="proj_100",
+        section_id="sec_200",
         due_string="tomorrow at 10:00",
         priority=2,
         labels=["kitap", "odak"],
     )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_section_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_100", "İş")
+    mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.get_sections.return_value = [[]]
+
+    result = create_task(
+        content="Task without section",
+        project_name="İş",
+        section_name_or_id="Olmayan Bölüm",
+    )
+    assert "⚠️ Belirtilen bölüm bulunamadı: 'Olmayan Bölüm'." in result
 
 
 @patch("todoist_mcp._get_api_client")
@@ -369,13 +424,16 @@ def test_update_task_success(mock_get_client):
     mock_api = MagicMock()
     mock_get_client.return_value = mock_api
     mock_project = MockProject("proj_99", "İş")
+    mock_section = MockSection("sec_55", "Tamamlananlar", project_id="proj_99")
     mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.get_sections.return_value = [[mock_section]]
 
     result = update_task(
         task_id="task_123",
         content="Yeni Başlık",
         description="Yeni Açıklama",
         project_name="İş",
+        section_name_or_id="Tamamlananlar",
         due_string="yarın 15:00",
         priority=3,
         labels=["@önemli", "proje"],
@@ -388,6 +446,7 @@ def test_update_task_success(mock_get_client):
     assert "Öncelik: p3" in result
     assert "Etiketler: @önemli, @proje" in result
     assert "Hedef Proje: 'İş' (ID: proj_99)" in result
+    assert "Hedef Bölüm: 'Tamamlananlar' (ID: sec_55)" in result
 
     mock_api.update_task.assert_called_once_with(
         task_id="task_123",
@@ -397,7 +456,7 @@ def test_update_task_success(mock_get_client):
         priority=3,
         labels=["önemli", "proje"],
     )
-    mock_api.move_task.assert_called_once_with(task_id="task_123", project_id="proj_99")
+    mock_api.move_task.assert_called_once_with(task_id="task_123", project_id="proj_99", section_id="sec_55")
 
 
 def test_update_task_no_fields_provided():
@@ -618,7 +677,7 @@ def test_list_projects_empty(mock_get_client):
 
 
 # =====================================================================
-# LABELS (LIST_LABELS & CREATE_LABEL) TESTS
+# LABELS (LIST_LABELS, CREATE_LABEL, UPDATE_LABEL, DELETE_LABEL) TESTS
 # =====================================================================
 
 @patch("todoist_mcp._get_api_client")
@@ -690,6 +749,189 @@ def test_create_label_sanitizes_exception(mock_get_client):
     result = create_label(name="error_label")
     assert result == "❌ Failed to create label '@error_label' in Todoist. Check server logs for details."
     assert "SECRET" not in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_label_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    lbl = MockLabel("lbl_100", "eski_ad")
+    mock_api.get_labels.return_value = [[lbl]]
+
+    result = update_label(label_name_or_id="eski_ad", new_name="yeni_ad", color="charcoal")
+    assert "✅ Etiket başarıyla güncellendi (ID: lbl_100)!" in result
+    assert "İsim: '@yeni_ad'" in result
+    assert "Renk: 'charcoal'" in result
+    mock_api.update_label.assert_called_once_with(label_id="lbl_100", name="yeni_ad", color="charcoal")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_label_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_labels.return_value = [[]]
+
+    result = update_label(label_name_or_id="olmayan_etiket", new_name="yeni_ad")
+    assert "⚠️ Güncellenecek etiket bulunamadı: '@olmayan_etiket'." in result
+
+
+def test_update_label_no_fields():
+    result = update_label(label_name_or_id="lbl_1")
+    assert "⚠️ Güncellenecek hiçbir alan belirtilmedi" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_label_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    lbl = MockLabel("lbl_200", "silinecek")
+    mock_api.get_labels.return_value = [[lbl]]
+    mock_api.delete_label.return_value = True
+
+    result = delete_label(label_name_or_id="silinecek")
+    assert "🗑️ Etiket başarıyla silindi: '@silinecek' (ID: lbl_200)." in result
+    mock_api.delete_label.assert_called_once_with(label_id="lbl_200")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_label_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_labels.return_value = [[]]
+
+    result = delete_label(label_name_or_id="olmayan_etiket")
+    assert "⚠️ Silinecek etiket bulunamadı: '@olmayan_etiket'." in result
+
+
+# =====================================================================
+# SECTIONS (CREATE_SECTION, LIST_SECTIONS, DELETE_SECTION) TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_create_section_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_proj = MockProject("proj_10", "Yazılım")
+    mock_api.get_projects.return_value = [[mock_proj]]
+    mock_api.add_section.return_value = MockSection("sec_101", "In Progress", project_id="proj_10")
+
+    result = create_section(name="In Progress", project_name_or_id="Yazılım")
+    assert "✅ Bölüm başarıyla oluşturuldu!" in result
+    assert "ID: sec_101" in result
+    assert "İsim: In Progress" in result
+    assert "Proje: 'Yazılım' (ID: proj_10)" in result
+    mock_api.add_section.assert_called_once_with(name="In Progress", project_id="proj_10")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_section_project_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_projects.return_value = [[]]
+
+    result = create_section(name="In Progress", project_name_or_id="Olmayan Proje")
+    assert "⚠️ Bölüm oluşturulacak hedef proje bulunamadı: 'Olmayan Proje'." in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_list_sections_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_proj = MockProject("proj_10", "Yazılım")
+    mock_api.get_projects.return_value = [[mock_proj]]
+    sec1 = MockSection("sec_1", "Backlog", project_id="proj_10")
+    sec2 = MockSection("sec_2", "Done", project_id="proj_10")
+    mock_api.get_sections.return_value = [[sec1, sec2]]
+
+    result = list_sections(project_name_or_id="Yazılım")
+    assert "📑 Mevcut Bölümler ('Yazılım' Projesi, Toplam: 2):" in result
+    assert "1. [sec_1] Backlog" in result
+    assert "2. [sec_2] Done" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_list_sections_empty(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_sections.return_value = [[]]
+
+    result = list_sections()
+    assert "ℹ️ Todoist hesabınızda herhangi bir bölüm bulunamadı." in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_section_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    sec = MockSection("sec_123", "Eski Bölüm")
+    mock_api.get_sections.return_value = [[sec]]
+    mock_api.delete_section.return_value = True
+
+    result = delete_section(section_name_or_id="Eski Bölüm")
+    assert "🗑️ Bölüm başarıyla silindi: 'Eski Bölüm' (ID: sec_123)." in result
+    mock_api.delete_section.assert_called_once_with(section_id="sec_123")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_delete_section_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_sections.return_value = [[]]
+
+    result = delete_section(section_name_or_id="Olmayan Bölüm")
+    assert "⚠️ Silinecek bölüm bulunamadı: 'Olmayan Bölüm'." in result
+
+
+# =====================================================================
+# COMMENTS (ADD_COMMENT, GET_COMMENTS) TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_add_comment_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.add_comment.return_value = MockComment(
+        comment_id="comm_1",
+        content="Bu görev için ilk not.",
+        task_id="task_99",
+        posted_at="2026-08-24T15:00:00Z",
+    )
+
+    result = add_comment(task_id="task_99", content="Bu görev için ilk not.")
+    assert "💬 Yorum başarıyla eklendi!" in result
+    assert "Yorum ID: comm_1" in result
+    assert "Görev ID: task_99" in result
+    assert "İçerik: Bu görev için ilk not." in result
+    mock_api.add_comment.assert_called_once_with(content="Bu görev için ilk not.", task_id="task_99")
+
+
+def test_add_comment_empty_content():
+    result = add_comment(task_id="task_1", content="   ")
+    assert "❌ Invalid input: Comment content cannot be empty" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_get_comments_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    c1 = MockComment("c1", "Not 1", task_id="task_1", posted_at="2026-08-24 10:00")
+    c2 = MockComment("c2", "Not 2", task_id="task_1", posted_at="2026-08-24 11:00")
+    mock_api.get_comments.return_value = [[c1, c2]]
+
+    result = get_comments(task_id="task_1")
+    assert "💬 Görev Yorumları (Görev ID: task_1, Toplam: 2):" in result
+    assert "1. [c1] [2026-08-24 10:00] Not 1" in result
+    assert "2. [c2] [2026-08-24 11:00] Not 2" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_get_comments_empty(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_comments.return_value = [[]]
+
+    result = get_comments(task_id="task_no_comm")
+    assert "ℹ️ Göreve ait (ID: task_no_comm) herhangi bir yorum veya not bulunamadı." in result
 
 
 # =====================================================================

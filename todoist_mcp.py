@@ -26,6 +26,8 @@ MAX_FILTER_QUERY_LENGTH = 500
 MAX_TASK_ID_LENGTH = 100
 MAX_COLOR_LENGTH = 50
 MAX_LABEL_NAME_LENGTH = 60
+MAX_SECTION_NAME_LENGTH = 120
+MAX_COMMENT_LENGTH = 4096
 
 
 def _get_api_client() -> TodoistAPI:
@@ -56,6 +58,17 @@ def _get_all_labels(api: TodoistAPI) -> list:
     for batch in api.get_labels():
         labels.extend(batch)
     return labels
+
+
+def _get_all_sections(api: TodoistAPI, project_id: Optional[str] = None) -> list:
+    """Retrieves sections from Todoist API across batches."""
+    sections = []
+    kwargs = {}
+    if project_id:
+        kwargs["project_id"] = project_id
+    for batch in api.get_sections(**kwargs):
+        sections.extend(batch)
+    return sections
 
 
 def _find_project_id(api: TodoistAPI, project_name: str) -> Optional[str]:
@@ -112,6 +125,74 @@ def _resolve_project(api: TodoistAPI, name_or_id: str) -> tuple[Optional[str], O
     return None, None
 
 
+def _resolve_label(api: TodoistAPI, name_or_id: str) -> tuple[Optional[str], Optional[str]]:
+    """Resolves label ID and name from either ID or name.
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: (label_id, label_name) or (None, None)
+    """
+    clean_identifier = name_or_id.strip().lstrip("@") if isinstance(name_or_id, str) else ""
+    if not clean_identifier:
+        return None, None
+
+    try:
+        labels = _get_all_labels(api)
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve labels for resolution (error_type=%s)",
+            type(e).__name__,
+            exc_info=False,
+        )
+        return None, None
+
+    # 1. Direct ID match
+    for label in labels:
+        if str(getattr(label, "id", "")) == clean_identifier:
+            return str(label.id), getattr(label, "name", "")
+
+    # 2. Exact name match
+    normalized = _normalize(clean_identifier)
+    for label in labels:
+        if _normalize(getattr(label, "name", "")) == normalized:
+            return str(label.id), getattr(label, "name", "")
+
+    return None, None
+
+
+def _resolve_section(api: TodoistAPI, name_or_id: str, project_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """Resolves section ID and name from either ID or name.
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: (section_id, section_name) or (None, None)
+    """
+    clean_identifier = name_or_id.strip() if isinstance(name_or_id, str) else ""
+    if not clean_identifier:
+        return None, None
+
+    try:
+        sections = _get_all_sections(api, project_id=project_id)
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve sections for resolution (error_type=%s)",
+            type(e).__name__,
+            exc_info=False,
+        )
+        return None, None
+
+    # 1. Direct ID match
+    for section in sections:
+        if str(getattr(section, "id", "")) == clean_identifier:
+            return str(section.id), getattr(section, "name", "")
+
+    # 2. Exact name match
+    normalized = _normalize(clean_identifier)
+    for section in sections:
+        if _normalize(getattr(section, "name", "")) == normalized:
+            return str(section.id), getattr(section, "name", "")
+
+    return None, None
+
+
 @mcp.tool()
 def create_task(
     content: Annotated[
@@ -162,8 +243,16 @@ def create_task(
             description="List of label names to attach to the task (e.g. ['work', 'urgent'], optional).",
         ),
     ] = None,
+    section_name_or_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_SECTION_NAME_LENGTH,
+            description="Target section name or ID within the project (optional).",
+        ),
+    ] = None,
 ) -> str:
-    """Creates a new task in Todoist with smart project resolution, labels, and natural language due dates.
+    """Creates a new task in Todoist with smart project, section, label, and due date resolution.
 
     Args:
         content: Task title/content (must not be empty, max 500 chars).
@@ -172,6 +261,7 @@ def create_task(
         due_string: Natural language date string (e.g. 'tomorrow at 14:00', max 150 chars).
         priority: Priority integer strictly between 1 (normal) and 4 (urgent).
         labels: Optional list of label strings to attach to the task.
+        section_name_or_id: Optional target section name or ID within the project.
     """
     clean_content = content.strip() if isinstance(content, str) else ""
     if not clean_content:
@@ -201,9 +291,20 @@ def create_task(
         else:
             return "❌ Invalid input: Labels must be a list of strings."
 
+    clean_section = section_name_or_id.strip() if isinstance(section_name_or_id, str) else None
+    if clean_section and len(clean_section) > MAX_SECTION_NAME_LENGTH:
+        return f"❌ Invalid input: Section identifier exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
+
     try:
         api = _get_api_client()
         project_id = _find_project_id(api, clean_project_name) if clean_project_name else None
+
+        section_id = None
+        section_display_name = ""
+        if clean_section:
+            section_id, section_display_name = _resolve_section(api, clean_section, project_id=project_id)
+            if not section_id:
+                return f"⚠️ Belirtilen bölüm bulunamadı: '{clean_section}'."
 
         task_kwargs = {
             "content": clean_content,
@@ -212,6 +313,8 @@ def create_task(
             "due_string": clean_due_string or None,
             "priority": priority,
         }
+        if section_id:
+            task_kwargs["section_id"] = section_id
         if clean_labels:
             task_kwargs["labels"] = clean_labels
 
@@ -219,13 +322,15 @@ def create_task(
 
         due_info = task.due.string if task.due and task.due.string else (clean_due_string or "Belirtilmedi")
         project_display = clean_project_name if clean_project_name else "Gelen Kutusu"
+        section_display = f"\n• Bölüm: {section_display_name} (ID: {section_id})" if section_id else ""
         labels_display = f"\n• Etiketler: {', '.join(['@' + l for l in task.labels])}" if getattr(task, "labels", None) else ""
 
         return (
             f"✅ Görev başarıyla oluşturuldu!\n"
             f"• ID: {task.id}\n"
             f"• Başlık: {task.content}\n"
-            f"• Proje: {project_display}\n"
+            f"• Proje: {project_display}"
+            f"{section_display}\n"
             f"• Öncelik: p{task.priority}\n"
             f"• Tarih / Tekrar: {due_info}"
             f"{labels_display}\n"
@@ -434,8 +539,16 @@ def update_task(
             description="New list of label names for the task (replaces existing labels, optional).",
         ),
     ] = None,
+    section_name_or_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_SECTION_NAME_LENGTH,
+            description="Target section name or ID to move the task into (optional).",
+        ),
+    ] = None,
 ) -> str:
-    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project.
+    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project/section.
 
     Args:
         task_id: The ID of the Todoist task to update (required).
@@ -445,6 +558,7 @@ def update_task(
         due_string: New natural language due date or schedule.
         priority: Priority integer between 1 (Normal) and 4 (Urgent).
         labels: New list of label names for the task.
+        section_name_or_id: Target section name or ID to move task into.
     """
     clean_task_id = str(task_id).strip() if task_id is not None else ""
     if not clean_task_id:
@@ -478,6 +592,10 @@ def update_task(
         else:
             return "❌ Invalid input: Labels must be a list of strings."
 
+    clean_section = section_name_or_id.strip() if isinstance(section_name_or_id, str) else None
+    if clean_section is not None and len(clean_section) > MAX_SECTION_NAME_LENGTH:
+        return f"❌ Invalid input: Section identifier exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
+
     if (
         clean_content is None
         and clean_description is None
@@ -485,8 +603,9 @@ def update_task(
         and clean_due_string is None
         and priority is None
         and clean_labels is None
+        and clean_section is None
     ):
-        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels) girin."
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels, section_name_or_id) girin."
 
     try:
         api = _get_api_client()
@@ -513,13 +632,29 @@ def update_task(
         if update_kwargs:
             api.update_task(task_id=clean_task_id, **update_kwargs)
 
-        # 2. Move task to target project if project_name provided
+        # 2. Move task to target project / section if requested
+        target_project_id = None
         if clean_project_name is not None:
-            project_id = _find_project_id(api, clean_project_name)
-            if not project_id:
+            target_project_id = _find_project_id(api, clean_project_name)
+            if not target_project_id:
                 return f"⚠️ Görev güncellendi fakat hedef proje bulunamadı: '{clean_project_name}'."
-            api.move_task(task_id=clean_task_id, project_id=project_id)
-            updated_fields.append(f"Hedef Proje: '{clean_project_name}' (ID: {project_id})")
+
+        target_section_id = None
+        if clean_section is not None:
+            target_section_id, sec_name = _resolve_section(api, clean_section, project_id=target_project_id)
+            if not target_section_id:
+                return f"⚠️ Görev güncellendi fakat hedef bölüm bulunamadı: '{clean_section}'."
+
+        if target_project_id is not None or target_section_id is not None:
+            move_kwargs = {}
+            if target_project_id is not None:
+                move_kwargs["project_id"] = target_project_id
+                updated_fields.append(f"Hedef Proje: '{clean_project_name}' (ID: {target_project_id})")
+            if target_section_id is not None:
+                move_kwargs["section_id"] = target_section_id
+                updated_fields.append(f"Hedef Bölüm: '{sec_name}' (ID: {target_section_id})")
+
+            api.move_task(task_id=clean_task_id, **move_kwargs)
 
         changes_summary = "\n".join([f"• {field}" for field in updated_fields])
         return (
@@ -586,13 +721,11 @@ def list_projects() -> str:
         if not projects:
             return "ℹ️ Todoist hesabınızda herhangi bir proje bulunamadı."
 
-        # Map projects by parent_id for hierarchical display
         children_map: dict[Optional[str], list] = {}
         all_ids = {str(getattr(p, "id", "")) for p in projects}
 
         for project in projects:
             parent_id = str(project.parent_id) if getattr(project, "parent_id", None) else None
-            # If parent_id refers to a non-existent project in list, treat as root
             if parent_id not in all_ids:
                 parent_id = None
             children_map.setdefault(parent_id, []).append(project)
@@ -849,6 +982,400 @@ def create_label(
             exc_info=False,
         )
         return f"❌ Failed to create label '@{clean_name}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def update_label(
+    label_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_LABEL_NAME_LENGTH,
+            description="The Todoist Label ID or Name to update (required).",
+        ),
+    ],
+    new_name: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_LABEL_NAME_LENGTH,
+            description="New name for the label (optional).",
+        ),
+    ] = None,
+    color: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_COLOR_LENGTH,
+            description="New color name for the label (e.g. 'berry_red', 'teal', optional).",
+        ),
+    ] = None,
+) -> str:
+    """Updates an existing Todoist label's name or color.
+
+    Args:
+        label_name_or_id: Name or ID of the label to update (required).
+        new_name: New name for the label.
+        color: New color name for the label.
+    """
+    clean_identifier = str(label_name_or_id).strip().lstrip("@") if label_name_or_id is not None else ""
+    if not clean_identifier:
+        return "❌ Invalid input: Label identifier cannot be empty or whitespace."
+    if len(clean_identifier) > MAX_LABEL_NAME_LENGTH:
+        return f"❌ Invalid input: Label identifier exceeds maximum length of {MAX_LABEL_NAME_LENGTH} characters."
+
+    clean_new_name = new_name.strip().lstrip("@") if isinstance(new_name, str) else None
+    if clean_new_name is not None and len(clean_new_name) > MAX_LABEL_NAME_LENGTH:
+        return f"❌ Invalid input: New label name exceeds maximum length of {MAX_LABEL_NAME_LENGTH} characters."
+
+    clean_color = color.strip().lower() if isinstance(color, str) else None
+    if clean_color and len(clean_color) > MAX_COLOR_LENGTH:
+        return f"❌ Invalid input: Color name exceeds maximum length of {MAX_COLOR_LENGTH} characters."
+
+    if clean_new_name is None and clean_color is None:
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen new_name veya color parametresi girin."
+
+    try:
+        api = _get_api_client()
+        label_id, old_name = _resolve_label(api, clean_identifier)
+
+        if not label_id:
+            return f"⚠️ Güncellenecek etiket bulunamadı: '@{clean_identifier}'."
+
+        kwargs = {}
+        updated_fields = []
+        if clean_new_name is not None:
+            kwargs["name"] = clean_new_name
+            updated_fields.append(f"İsim: '@{clean_new_name}'")
+        if clean_color is not None:
+            kwargs["color"] = clean_color
+            updated_fields.append(f"Renk: '{clean_color}'")
+
+        api.update_label(label_id=label_id, **kwargs)
+
+        changes_summary = "\n".join([f"• {field}" for field in updated_fields])
+        return (
+            f"✅ Etiket başarıyla güncellendi (ID: {label_id})!\n"
+            f"Yapılan değişiklikler:\n"
+            f"{changes_summary}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to update label in Todoist (identifier=%s, error_type=%s)",
+            clean_identifier,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to update label '@{clean_identifier}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def delete_label(
+    label_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_LABEL_NAME_LENGTH,
+            description="The Todoist Label ID or Name to delete (required).",
+        ),
+    ],
+) -> str:
+    """Deletes a label from Todoist by either its ID or label name.
+
+    Args:
+        label_name_or_id: The ID or name of the label to delete.
+    """
+    clean_identifier = str(label_name_or_id).strip().lstrip("@") if label_name_or_id is not None else ""
+    if not clean_identifier:
+        return "❌ Invalid input: Label identifier cannot be empty or whitespace."
+    if len(clean_identifier) > MAX_LABEL_NAME_LENGTH:
+        return f"❌ Invalid input: Label identifier exceeds maximum length of {MAX_LABEL_NAME_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        label_id, label_name = _resolve_label(api, clean_identifier)
+
+        if not label_id:
+            return f"⚠️ Silinecek etiket bulunamadı: '@{clean_identifier}'."
+
+        success = api.delete_label(label_id=label_id)
+        display_name = f"'@{label_name}' (ID: {label_id})" if label_name else f"ID: {label_id}"
+
+        if success:
+            return f"🗑️ Etiket başarıyla silindi: {display_name}."
+        else:
+            return f"⚠️ Etiket silinemedi: {display_name}."
+    except Exception as e:
+        logger.error(
+            "Failed to delete label in Todoist (identifier=%s, error_type=%s)",
+            clean_identifier,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to delete label '@{clean_identifier}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def create_section(
+    name: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_SECTION_NAME_LENGTH,
+            description="The name of the new section/column (required, e.g. 'In Progress', 'Done').",
+        ),
+    ],
+    project_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="The name or ID of the parent project where the section will be created (required).",
+        ),
+    ],
+) -> str:
+    """Creates a new section (column / Kanban list) in a Todoist project.
+
+    Args:
+        name: Name of the section (must not be empty, max 120 chars).
+        project_name_or_id: Target project name or ID.
+    """
+    clean_name = name.strip() if isinstance(name, str) else ""
+    if not clean_name:
+        return "❌ Invalid input: Section name cannot be empty or whitespace."
+    if len(clean_name) > MAX_SECTION_NAME_LENGTH:
+        return f"❌ Invalid input: Section name exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
+
+    clean_project = str(project_name_or_id).strip() if project_name_or_id is not None else ""
+    if not clean_project:
+        return "❌ Invalid input: Project identifier cannot be empty or whitespace."
+    if len(clean_project) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project identifier exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        project_id, project_name = _resolve_project(api, clean_project)
+
+        if not project_id:
+            return f"⚠️ Bölüm oluşturulacak hedef proje bulunamadı: '{clean_project}'."
+
+        section = api.add_section(name=clean_name, project_id=project_id)
+
+        return (
+            f"✅ Bölüm başarıyla oluşturuldu!\n"
+            f"• ID: {section.id}\n"
+            f"• İsim: {section.name}\n"
+            f"• Proje: '{project_name}' (ID: {project_id})"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to create section in Todoist (name=%s, error_type=%s)",
+            clean_name,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to create section '{clean_name}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def list_sections(
+    project_name_or_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="Optional project name or ID to list sections specifically for that project.",
+        ),
+    ] = None,
+) -> str:
+    """Lists sections (Kanban columns) in Todoist for a specific project or across all projects."""
+    clean_project = project_name_or_id.strip() if isinstance(project_name_or_id, str) else None
+    if clean_project and len(clean_project) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project identifier exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        project_id = None
+        project_name = None
+
+        if clean_project:
+            project_id, project_name = _resolve_project(api, clean_project)
+            if not project_id:
+                return f"⚠️ Belirtilen proje bulunamadı: '{clean_project}'."
+
+        sections = _get_all_sections(api, project_id=project_id)
+
+        if not sections:
+            scope = f"'{project_name}' projesinde" if project_name else "hesabınızda"
+            return f"ℹ️ Todoist {scope} herhangi bir bölüm bulunamadı."
+
+        title_scope = f"'{project_name}' Projesi" if project_name else "Tüm Projeler"
+        lines = [f"📑 Mevcut Bölümler ({title_scope}, Toplam: {len(sections)}):", ""]
+
+        for idx, section in enumerate(sections, start=1):
+            lines.append(f"{idx}. [{section.id}] {section.name} (Proje ID: {section.project_id})")
+
+        return "\n".join(lines).strip()
+    except Exception as e:
+        logger.error(
+            "Failed to list sections from Todoist (error_type=%s)",
+            type(e).__name__,
+            exc_info=False,
+        )
+        return "❌ Failed to list sections from Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def delete_section(
+    section_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_SECTION_NAME_LENGTH,
+            description="The Todoist Section ID or Name to delete (required).",
+        ),
+    ],
+) -> str:
+    """Deletes a section from Todoist by its ID or name.
+
+    Args:
+        section_name_or_id: The ID or name of the section to delete.
+    """
+    clean_identifier = str(section_name_or_id).strip() if section_name_or_id is not None else ""
+    if not clean_identifier:
+        return "❌ Invalid input: Section identifier cannot be empty or whitespace."
+    if len(clean_identifier) > MAX_SECTION_NAME_LENGTH:
+        return f"❌ Invalid input: Section identifier exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        section_id, section_name = _resolve_section(api, clean_identifier)
+
+        if not section_id:
+            return f"⚠️ Silinecek bölüm bulunamadı: '{clean_identifier}'."
+
+        success = api.delete_section(section_id=section_id)
+        display_name = f"'{section_name}' (ID: {section_id})" if section_name else f"ID: {section_id}"
+
+        if success:
+            return f"🗑️ Bölüm başarıyla silindi: {display_name}."
+        else:
+            return f"⚠️ Bölüm silinemedi: {display_name}."
+    except Exception as e:
+        logger.error(
+            "Failed to delete section in Todoist (identifier=%s, error_type=%s)",
+            clean_identifier,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to delete section '{clean_identifier}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def add_comment(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to attach the comment to (required).",
+        ),
+    ],
+    content: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_COMMENT_LENGTH,
+            description="The text content or markdown note of the comment (required).",
+        ),
+    ],
+) -> str:
+    """Adds a comment or note to an existing Todoist task.
+
+    Args:
+        task_id: ID of the task to attach the comment to.
+        content: Comment text or markdown notes (max 4096 chars).
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    clean_content = content.strip() if isinstance(content, str) else ""
+    if not clean_content:
+        return "❌ Invalid input: Comment content cannot be empty or whitespace."
+    if len(clean_content) > MAX_COMMENT_LENGTH:
+        return f"❌ Invalid input: Comment content exceeds maximum length of {MAX_COMMENT_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        comment = api.add_comment(content=clean_content, task_id=clean_task_id)
+
+        posted_str = f"\n• Tarih: {comment.posted_at}" if getattr(comment, "posted_at", None) else ""
+
+        return (
+            f"💬 Yorum başarıyla eklendi!\n"
+            f"• Yorum ID: {comment.id}\n"
+            f"• Görev ID: {clean_task_id}\n"
+            f"• İçerik: {comment.content}"
+            f"{posted_str}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to add comment to task in Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to add comment to task (ID: {clean_task_id}) in Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def get_comments(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to retrieve comments for (required).",
+        ),
+    ],
+) -> str:
+    """Retrieves all comments and notes attached to a specific Todoist task.
+
+    Args:
+        task_id: The ID of the task whose comments will be retrieved.
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        comments = []
+        for batch in api.get_comments(task_id=clean_task_id):
+            comments.extend(batch)
+
+        if not comments:
+            return f"ℹ️ Göreve ait (ID: {clean_task_id}) herhangi bir yorum veya not bulunamadı."
+
+        lines = [f"💬 Görev Yorumları (Görev ID: {clean_task_id}, Toplam: {len(comments)}):", ""]
+        for idx, comment in enumerate(comments, start=1):
+            posted = f" [{comment.posted_at}]" if getattr(comment, "posted_at", None) else ""
+            lines.append(f"{idx}. [{comment.id}]{posted} {comment.content}")
+
+        return "\n".join(lines).strip()
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve comments from Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to retrieve comments for task (ID: {clean_task_id}) from Todoist. Check server logs for details."
 
 
 if __name__ == "__main__":
