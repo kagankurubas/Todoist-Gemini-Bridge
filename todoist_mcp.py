@@ -19,6 +19,21 @@ load_dotenv()
 
 mcp = FastMCP("Todoist")
 
+
+def _log_http_error_detail(e: Exception) -> None:
+    """Logs the raw HTTP status and response body for an API error (server-side only, never returned to the client)."""
+    response = getattr(e, "response", None)
+    if response is not None:
+        logger.error("Todoist API error detail: status=%s body=%s", response.status_code, response.text)
+
+
+def _is_deadline_plan_restriction(e: Exception, deadline_date_requested: bool) -> bool:
+    """True if the error is a 403 on a request that included deadline_date (Deadlines require Pro/Business)."""
+    if not deadline_date_requested:
+        return False
+    response = getattr(e, "response", None)
+    return response is not None and response.status_code == 403
+
 MAX_CONTENT_LENGTH = 500
 MAX_DESCRIPTION_LENGTH = 4096
 MAX_PROJECT_NAME_LENGTH = 120
@@ -384,6 +399,9 @@ def create_task(
             type(e).__name__,
             exc_info=False,
         )
+        _log_http_error_detail(e)
+        if _is_deadline_plan_restriction(e, parsed_deadline_date is not None):
+            return "❌ Deadline özelliği Todoist Free/Beginner planında desteklenmiyor — Pro veya Business plan gerekiyor (403 Forbidden)."
         return "❌ Todoist task creation failed. Check server logs for details."
 
 
@@ -825,6 +843,9 @@ def update_task(
             type(e).__name__,
             exc_info=False,
         )
+        _log_http_error_detail(e)
+        if _is_deadline_plan_restriction(e, parsed_deadline_date is not None):
+            return "❌ Deadline özelliği Todoist Free/Beginner planında desteklenmiyor — Pro veya Business plan gerekiyor (403 Forbidden)."
         return f"❌ Failed to update task in Todoist (ID: {clean_task_id}). Check server logs for details."
 
 

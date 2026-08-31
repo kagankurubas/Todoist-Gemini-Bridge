@@ -5,6 +5,7 @@ All tests use mocks to ensure zero network calls and deterministic results.
 
 from datetime import date
 from unittest.mock import MagicMock, patch
+import httpx
 import pytest
 from todoist_mcp import (
     MAX_COLOR_LENGTH,
@@ -97,6 +98,14 @@ class MockComment:
         self.content = content
         self.task_id = task_id
         self.posted_at = posted_at
+
+
+def _make_http_status_error(status_code: int, text: str = "") -> httpx.HTTPStatusError:
+    """Builds a real httpx.HTTPStatusError with a `.response` carrying the given status/body,
+    matching what the todoist_api_python SDK raises on a non-2xx response."""
+    request = httpx.Request("POST", "https://api.todoist.com/api/v1/tasks")
+    response = httpx.Response(status_code, text=text, request=request)
+    return httpx.HTTPStatusError(f"{status_code} error", request=request, response=response)
 
 
 class MockTask:
@@ -346,6 +355,39 @@ def test_create_task_due_string_and_deadline_date_together(mock_get_client):
         priority=1,
         deadline_date=date(2026, 9, 1),
     )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_deadline_date_403_reports_plan_restriction(mock_get_client):
+    """deadline_date verilen bir istek 403 Forbidden ile reddedilirse, Free/Beginner planında
+    Deadline özelliğinin desteklenmediğini açıklayan özel bir hata mesajı dönmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.side_effect = _make_http_status_error(403, text="Forbidden")
+
+    result = create_task(content="Son teslimli görev", deadline_date="2026-09-01")
+
+    assert result == (
+        "❌ Deadline özelliği Todoist Free/Beginner planında desteklenmiyor "
+        "— Pro veya Business plan gerekiyor (403 Forbidden)."
+    )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_403_without_deadline_date_uses_generic_message(mock_get_client):
+    """deadline_date verilmeden gelen bir 403, plan-kısıtlaması mesajını değil genel hata
+    mesajını dönmelidir (deadline dışı 403 sebepleri etkilenmemeli)."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.side_effect = _make_http_status_error(403, text="Forbidden")
+
+    result = create_task(content="Son teslimsiz görev")
+
+    assert result == "❌ Todoist task creation failed. Check server logs for details."
 
 
 def test_create_task_empty_content():
@@ -809,6 +851,35 @@ def test_update_task_due_string_and_deadline_date_together(mock_get_client):
         due_string="tomorrow at 10:00",
         deadline_date=date(2026, 9, 1),
     )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_task_deadline_date_403_reports_plan_restriction(mock_get_client):
+    """deadline_date güncellenirken 403 Forbidden alınırsa, Free/Beginner planında Deadline
+    özelliğinin desteklenmediğini açıklayan özel bir hata mesajı dönmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.update_task.side_effect = _make_http_status_error(403, text="Forbidden")
+
+    result = update_task(task_id="task_123", deadline_date="2026-09-01")
+
+    assert result == (
+        "❌ Deadline özelliği Todoist Free/Beginner planında desteklenmiyor "
+        "— Pro veya Business plan gerekiyor (403 Forbidden)."
+    )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_task_403_without_deadline_date_uses_generic_message(mock_get_client):
+    """deadline_date olmadan gelen bir 403, plan-kısıtlaması mesajını değil görev-kimliğini
+    içeren genel hata mesajını dönmelidir (deadline dışı 403 sebepleri etkilenmemeli)."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.update_task.side_effect = _make_http_status_error(403, text="Forbidden")
+
+    result = update_task(task_id="task_123", content="Updated Content")
+
+    assert result == "❌ Failed to update task in Todoist (ID: task_123). Check server logs for details."
 
 
 # =====================================================================
