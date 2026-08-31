@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Pydantic-v2-e92063?logo=pydantic&logoColor=white" alt="Pydantic" />
   <img src="https://img.shields.io/badge/Todoist_API-v1-e44332?logo=todoist&logoColor=white" alt="Todoist API" />
   <img src="https://img.shields.io/badge/Google_Tasks-OAuth_2.0-4285F4?logo=google&logoColor=white" alt="Google Tasks API" />
-  <img src="https://img.shields.io/badge/Tests-150%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
+  <img src="https://img.shields.io/badge/Tests-168%20Passed-brightgreen?logo=pytest&logoColor=white" alt="Pytest" />
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License" />
 </p>
 
@@ -39,12 +39,12 @@ flowchart TD
 
     subgraph CoreBridge["🌉 Core Bridge Engine"]
         B1["🧹 Parser & Cleaner\n(Markdown fences, #Project, p[1-4], @Date)"]
-        B2["🛡️ Pydantic Validation\n(TaskPayload, BatchTaskPayload - Max 50)"]
+        B2["🛡️ Pydantic Validation\n(TaskPayload, BatchTaskPayload - Max 50\nparent_id, deadline_date)"]
         B3["🎯 Smart Project Resolver\n(Case-insensitive project_name ➔ project_id)"]
     end
 
     subgraph Gateways["🚀 Gateways & Interfaces"]
-        C1["🤖 FastMCP Server (todoist_mcp.py)\n[Task, Section, Label, Comment & Project Tools]"]
+        C1["🤖 FastMCP Server (todoist_mcp.py)\n[Task/Project Get/Create/Update/Delete, Section, Label, Comment Tools]"]
         C2["⚡ FastAPI Server (app.py)\n[Timing-Safe X-Bridge-Token Auth]"]
         C3["🔄 Sync Worker (sync_worker.py)\n[OAuth 2.0 Auto-Delete]"]
         C4["🖥️ Standalone CLI (main.py / send_to_bridge.py)"]
@@ -83,11 +83,11 @@ Todoist Gemini Bridge is an open-source Python automation toolkit and local **Mo
 ### 🌟 Key Features
 
 - **🤖 Model Context Protocol (MCP) Server (`todoist_mcp.py`):** FastMCP server over STDIO for Claude Desktop with full suite of Todoist management tools:
-  - **Tasks:** `create_task`, `list_tasks`, `complete_task`, `reopen_task`, `update_task`, `delete_task`
+  - **Tasks:** `create_task` (subtasks via `parent_id`, deadlines via `deadline_date`), `get_task`, `list_tasks`, `complete_task`, `reopen_task`, `update_task` (move/reparent, deadline updates), `delete_task`
   - **Sections / Kanban:** `create_section`, `list_sections`, `delete_section`
   - **Labels:** `list_labels`, `create_label`, `update_label`, `delete_label`
   - **Comments / Notes:** `add_comment`, `get_comments`
-  - **Projects & Hierarchy:** `create_project` (nested subprojects), `delete_project`, `list_projects` (tree view)
+  - **Projects & Hierarchy:** `create_project` (nested subprojects), `get_project`, `update_project`, `delete_project`, `list_projects` (tree view)
 - **🛡️ Pydantic & Batch Validation:** Strict type-safe schema verification with a 50-task maximum batch limit for both dictionary and list payloads.
 - **📱 Google Tasks → Todoist Sync Worker (`sync_worker.py`):** OAuth 2.0 daemon that synchronizes tasks from Google Tasks, parses tags (`#Project`, `p[1-4]`, `@Date`), pushes them to Todoist, and cleans up Google Tasks.
 - **🎯 Smart Project Resolution:** Dynamically maps human-readable project names (case-insensitive with Unicode normalization) to Todoist `project_id`. Defaults safely to `Inbox` if not found.
@@ -111,7 +111,7 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Direct Todoist CLI runner & table formatter
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Schema
 ├── tasks_sample.json       # Sample task template
-├── tests/                  # Pytest test suite (150 unit & integration tests)
+├── tests/                  # Pytest test suite (168 unit & integration tests)
 ├── Dockerfile              # Docker container (runs sync_worker.py by default)
 ├── .dockerignore           # Excluded files for Docker build context
 ├── requirements.txt        # Python dependencies
@@ -281,11 +281,11 @@ Todoist Gemini Bridge, yapay zeka modelleri (Claude Desktop, Gemini, ChatGPT), o
 ### 🌟 Öne Çıkan Özellikler
 
 - **🤖 Model Context Protocol (MCP) Sunucusu (`todoist_mcp.py`):** Claude Desktop için FastMCP mimarisiyle yerel STDIO üzerinden çalışan kapsamlı Todoist yönetim araç seti:
-  - **Görev Yönetimi:** `create_task`, `list_tasks`, `complete_task`, `reopen_task`, `update_task`, `delete_task`
+  - **Görev Yönetimi:** `create_task` (parent_id ile alt görev, deadline_date ile son teslim tarihi), `get_task`, `list_tasks`, `complete_task`, `reopen_task`, `update_task` (proje/bölüm/üst görev taşıma, deadline güncelleme), `delete_task`
   - **Bölüm / Kanban Listeleri:** `create_section`, `list_sections`, `delete_section`
   - **Etiketler:** `list_labels`, `create_label`, `update_label`, `delete_label`
   - **Yorumlar & Notlar:** `add_comment`, `get_comments`
-  - **Projeler & Hiyerarşi:** `create_project` (alt proje / parent_id), `delete_project`, `list_projects` (ağaç görünümü)
+  - **Projeler & Hiyerarşi:** `create_project` (alt proje / parent_id), `get_project`, `update_project`, `delete_project`, `list_projects` (ağaç görünümü)
 - **🛡️ Pydantic ile Doğrulama & Toplu İşlem Limiti:** Tekil veya toplu görev verilerinin tiplerini doğrular; tek seferde en fazla 50 görev sınırını hem liste hem sözlük formatında zorunlu kılar.
 - **📱 Google Tasks → Todoist Senkronizasyonu (`sync_worker.py`):** Google Tasks'teki görevleri okur, etiketleri (`#Proje`, `p[1-4]`, `@Tarih`) ayrıştırır, Todoist'e aktarır ve aktarılanları siler.
 - **🎯 Akıllı Proje Eşleme:** Proje isimlerini (`project_name`) büyük/küçük harf duyarsız ve Türkçe karakter uyumlu olarak dinamik Todoist proje ID'lerine eşler; bulunamazsa güvenli bir şekilde `Gelen Kutusu`na (Inbox) yönlendirir.
@@ -308,7 +308,7 @@ Todoist-Gemini-Bridge/
 ├── main.py                 # Doğrudan Todoist CLI çalıştırıcısı ve tablo formatlayıcı
 ├── gemini_tool_schema.json # Gemini Function Calling / Tool Şeması
 ├── tasks_sample.json       # Örnek görev şablonu
-├── tests/                  # Pytest test paketi (150 birim ve entegrasyon testi)
+├── tests/                  # Pytest test paketi (168 birim ve entegrasyon testi)
 ├── Dockerfile              # Docker konteyner tanımı (varsayılan: sync_worker.py)
 ├── .dockerignore           # Docker derleme bağlamı hariç tutma listesi
 ├── requirements.txt        # Python bağımlılıkları
@@ -468,7 +468,7 @@ python send_to_bridge.py --file tasks_sample.json
 <a name="tests"></a>
 ## 🧪 Testing / Testleri Çalıştırma
 
-Projede 150 adet birim ve entegrasyon testi yer almaktadır:
+Projede 168 adet birim ve entegrasyon testi yer almaktadır:
 
 ```bash
 # Tüm testleri çalıştırmak için:

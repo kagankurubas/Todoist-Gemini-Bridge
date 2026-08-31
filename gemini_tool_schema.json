@@ -38,6 +38,10 @@
                 "parent_id": {
                   "type": "STRING",
                   "description": "Bu görevi belirtilen Todoist görev ID'sinin alt görevi (subtask) yapar (opsiyonel)."
+                },
+                "deadline_date": {
+                  "type": "STRING",
+                  "description": "Opsiyonel resmi son teslim tarihi (deadline), YYYY-MM-DD formatında (ör. '2026-09-01'). due_string'den farklıdır: due_string görevin ne zaman yapılacağını belirtir, deadline_date ise Todoist'in ayrı 'Deadline' (son teslim tarihi) alanını ayarlar."
                 }
               },
               "required": [

@@ -3,6 +3,7 @@ Unit and security tests for the Todoist FastMCP Server.
 All tests use mocks to ensure zero network calls and deterministic results.
 """
 
+from datetime import date
 from unittest.mock import MagicMock, patch
 import pytest
 from todoist_mcp import (
@@ -31,6 +32,7 @@ from todoist_mcp import (
     delete_section,
     delete_task,
     get_comments,
+    get_project,
     get_task,
     list_labels,
     list_projects,
@@ -54,6 +56,8 @@ class MockProject:
         color: str = None,
         url: str = None,
         parent_id: str = None,
+        is_favorite: bool = False,
+        view_style: str = None,
     ):
         self.id = project_id
         self.name = name
@@ -61,6 +65,8 @@ class MockProject:
         self.color = color
         self.url = url or f"https://app.todoist.com/app/project/{project_id}"
         self.parent_id = parent_id
+        self.is_favorite = is_favorite
+        self.view_style = view_style
 
 
 class MockLabel:
@@ -255,6 +261,91 @@ def test_create_task_without_parent_id_omitted(mock_get_client):
 
     call_kwargs = mock_api.add_task.call_args.kwargs
     assert "parent_id" not in call_kwargs
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_with_deadline_date(mock_get_client):
+    """deadline_date verildiğinde bir date nesnesine çevrilip SDK çağrısına dahil edilmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.return_value = MockTask(
+        task_id="task_deadline_001",
+        content="Son teslimli görev",
+        priority=1,
+    )
+
+    result = create_task(content="Son teslimli görev", deadline_date="2026-09-01")
+
+    assert "✅ Görev başarıyla oluşturuldu!" in result
+    assert "Son Teslim Tarihi (Deadline): 2026-09-01" in result
+    mock_api.add_task.assert_called_once_with(
+        content="Son teslimli görev",
+        description=None,
+        project_id=None,
+        due_string=None,
+        priority=1,
+        deadline_date=date(2026, 9, 1),
+    )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_without_deadline_date_omitted(mock_get_client):
+    """deadline_date verilmediğinde SDK çağrısında hiç yer almamalıdır."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.return_value = MockTask(
+        task_id="task_004",
+        content="Son teslimsiz görev",
+        priority=1,
+    )
+
+    create_task(content="Son teslimsiz görev")
+
+    call_kwargs = mock_api.add_task.call_args.kwargs
+    assert "deadline_date" not in call_kwargs
+
+
+def test_create_task_invalid_deadline_date_format():
+    result = create_task(content="Task", deadline_date="01-09-2026")
+    assert "❌ Invalid input: deadline_date must be in YYYY-MM-DD format" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_due_string_and_deadline_date_together(mock_get_client):
+    """due_string ve deadline_date aynı anda verildiğinde birbirini geçersiz kılmadan,
+    ikisi de bağımsız alanlar olarak SDK çağrısına dahil edilmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.return_value = MockTask(
+        task_id="task_both_001",
+        content="Hem tarihli hem son teslimli görev",
+        priority=1,
+        due_string="tomorrow at 10:00",
+    )
+
+    result = create_task(
+        content="Hem tarihli hem son teslimli görev",
+        due_string="tomorrow at 10:00",
+        deadline_date="2026-09-01",
+    )
+
+    assert "✅ Görev başarıyla oluşturuldu!" in result
+    assert "Tarih / Tekrar: tomorrow at 10:00" in result
+    assert "Son Teslim Tarihi (Deadline): 2026-09-01" in result
+    mock_api.add_task.assert_called_once_with(
+        content="Hem tarihli hem son teslimli görev",
+        description=None,
+        project_id=None,
+        due_string="tomorrow at 10:00",
+        priority=1,
+        deadline_date=date(2026, 9, 1),
+    )
 
 
 def test_create_task_empty_content():
@@ -667,6 +758,59 @@ def test_update_task_unparent_with_project_name_skips_current_project_lookup(moc
     mock_api.move_task.assert_called_once_with(task_id="task_child", project_id="proj_42")
 
 
+@patch("todoist_mcp._get_api_client")
+def test_update_task_with_deadline_date(mock_get_client):
+    """deadline_date verildiğinde bir date nesnesine çevrilip api.update_task çağrısına dahil edilmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    result = update_task(task_id="task_123", deadline_date="2026-09-01")
+
+    assert "✅ Görev başarıyla güncellendi (ID: task_123)!" in result
+    assert "Son Teslim Tarihi (Deadline): '2026-09-01'" in result
+    mock_api.update_task.assert_called_once_with(task_id="task_123", deadline_date=date(2026, 9, 1))
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_task_without_deadline_date_omitted(mock_get_client):
+    """deadline_date verilmediğinde api.update_task çağrısında hiç yer almamalıdır."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    update_task(task_id="task_123", content="Yeni Başlık")
+
+    call_kwargs = mock_api.update_task.call_args.kwargs
+    assert "deadline_date" not in call_kwargs
+
+
+def test_update_task_invalid_deadline_date_format():
+    result = update_task(task_id="task_123", deadline_date="01-09-2026")
+    assert "❌ Invalid input: deadline_date must be in YYYY-MM-DD format" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_task_due_string_and_deadline_date_together(mock_get_client):
+    """due_string ve deadline_date aynı anda güncellendiğinde birbirini geçersiz kılmadan,
+    ikisi de bağımsız alanlar olarak tek bir api.update_task çağrısına dahil edilmelidir."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    result = update_task(
+        task_id="task_123",
+        due_string="tomorrow at 10:00",
+        deadline_date="2026-09-01",
+    )
+
+    assert "✅ Görev başarıyla güncellendi (ID: task_123)!" in result
+    assert "Tarih: 'tomorrow at 10:00'" in result
+    assert "Son Teslim Tarihi (Deadline): '2026-09-01'" in result
+    mock_api.update_task.assert_called_once_with(
+        task_id="task_123",
+        due_string="tomorrow at 10:00",
+        deadline_date=date(2026, 9, 1),
+    )
+
+
 # =====================================================================
 # DELETE_TASK TESTS
 # =====================================================================
@@ -706,6 +850,73 @@ def test_delete_task_sanitizes_exception(mock_get_client):
     result = delete_task(task_id="task_err")
     assert result == "❌ Failed to delete task in Todoist (ID: task_err). Check server logs for details."
     assert "SECRET" not in result
+
+
+# =====================================================================
+# GET_PROJECT TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_get_project_success(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_project.return_value = MockProject(
+        "proj_777",
+        "İş Projesi",
+        color="berry_red",
+        parent_id="proj_parent_1",
+        is_favorite=True,
+        view_style="board",
+    )
+
+    result = get_project(project_id="proj_777")
+
+    assert "📁 Proje Detayları (ID: proj_777)" in result
+    assert "İsim: İş Projesi" in result
+    assert "Renk: berry_red" in result
+    assert "Üst Proje ID (parent_id): proj_parent_1" in result
+    assert "Favori mi: Evet" in result
+    assert "Görünüm Stili: board" in result
+    mock_api.get_project.assert_called_once_with(project_id="proj_777")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_get_project_without_parent_shows_top_level(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_project.return_value = MockProject("proj_888", "Kişisel")
+
+    result = get_project(project_id="proj_888")
+    assert "Üst Proje ID (parent_id): Yok (üst seviye proje)" in result
+    assert "Renk: Yok" in result
+    assert "Favori mi: Hayır" in result
+    assert "Görünüm Stili: Belirlenmedi" in result
+
+
+def test_get_project_empty_id():
+    result = get_project(project_id="   ")
+    assert "❌ Invalid input: Project ID cannot be empty or whitespace." in result
+
+
+def test_get_project_id_too_long():
+    result = get_project(project_id="x" * (MAX_TASK_ID_LENGTH + 1))
+    assert f"❌ Invalid input: Project ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters." in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_get_project_sanitizes_exception_and_logs_cleanly(mock_get_client, caplog):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_project.side_effect = Exception(
+        "TODOIST_API_TOKEN=SUPER_SECRET_TOKEN_123 failed Authorization: Bearer SUPER_SECRET_TOKEN_123"
+    )
+
+    with caplog.at_level("INFO"):
+        result = get_project(project_id="proj_err")
+
+    assert result == "❌ Failed to retrieve project from Todoist (ID: proj_err). Check server logs for details."
+    assert "SUPER_SECRET_TOKEN_123" not in result
+    assert "SUPER_SECRET_TOKEN_123" not in caplog.text
 
 
 # =====================================================================

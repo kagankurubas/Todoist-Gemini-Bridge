@@ -44,6 +44,15 @@ class TaskPayload(BaseModel):
         default=None,
         description="Optional ID of the parent task, making this task a sub-task.",
     )
+    deadline_date: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional official deadline date in YYYY-MM-DD format (e.g. '2026-09-01'). "
+            "This is independent from due_string/due_date/due_datetime: due_* fields control "
+            "when the task is scheduled to be worked on, while deadline_date represents Todoist's "
+            "separate 'Deadline' concept (a hard due-by date shown distinctly in the UI)."
+        ),
+    )
 
 
 class BatchTaskPayload(BaseModel):

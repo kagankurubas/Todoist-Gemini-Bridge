@@ -5,6 +5,7 @@ Integrates Todoist API tools via FastMCP over STDIO.
 
 import logging
 import os
+from datetime import date
 from typing import Annotated, Optional
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -259,6 +260,18 @@ def create_task(
             description="Bu görevi belirtilen Todoist görev ID'sinin alt görevi (subtask) yapar (opsiyonel).",
         ),
     ] = None,
+    deadline_date: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "Optional official deadline date in YYYY-MM-DD format (e.g. '2026-09-01'). "
+                "This is independent from due_string: due_string controls when the task is "
+                "scheduled to be worked on, while deadline_date sets Todoist's separate "
+                "'Deadline' — a hard due-by date shown distinctly in the UI (optional)."
+            ),
+        ),
+    ] = None,
 ) -> str:
     """Creates a new task in Todoist with smart project, section, label, and due date resolution.
 
@@ -271,6 +284,7 @@ def create_task(
         labels: Optional list of label strings to attach to the task.
         section_name_or_id: Optional target section name or ID within the project.
         parent_id: Optional Todoist task ID to create this task as a subtask of (max 100 chars).
+        deadline_date: Optional official deadline date (YYYY-MM-DD), distinct from due_string.
     """
     clean_content = content.strip() if isinstance(content, str) else ""
     if not clean_content:
@@ -308,6 +322,14 @@ def create_task(
     if clean_parent_id and len(clean_parent_id) > MAX_TASK_ID_LENGTH:
         return f"❌ Invalid input: Parent task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
 
+    clean_deadline_date = deadline_date.strip() if isinstance(deadline_date, str) else None
+    parsed_deadline_date = None
+    if clean_deadline_date:
+        try:
+            parsed_deadline_date = date.fromisoformat(clean_deadline_date)
+        except ValueError:
+            return f"❌ Invalid input: deadline_date must be in YYYY-MM-DD format (received: '{clean_deadline_date}')."
+
     try:
         api = _get_api_client()
         project_id = _find_project_id(api, clean_project_name) if clean_project_name else None
@@ -332,6 +354,8 @@ def create_task(
             task_kwargs["labels"] = clean_labels
         if clean_parent_id:
             task_kwargs["parent_id"] = clean_parent_id
+        if parsed_deadline_date:
+            task_kwargs["deadline_date"] = parsed_deadline_date
 
         task = api.add_task(**task_kwargs)
 
@@ -339,6 +363,7 @@ def create_task(
         project_display = clean_project_name if clean_project_name else "Gelen Kutusu"
         section_display = f"\n• Bölüm: {section_display_name} (ID: {section_id})" if section_id else ""
         labels_display = f"\n• Etiketler: {', '.join(['@' + l for l in task.labels])}" if getattr(task, "labels", None) else ""
+        deadline_display = f"\n• Son Teslim Tarihi (Deadline): {clean_deadline_date}" if clean_deadline_date else ""
 
         return (
             f"✅ Görev başarıyla oluşturuldu!\n"
@@ -348,6 +373,7 @@ def create_task(
             f"{section_display}\n"
             f"• Öncelik: p{task.priority}\n"
             f"• Tarih / Tekrar: {due_info}"
+            f"{deadline_display}"
             f"{labels_display}\n"
             f"• URL: {task.url}"
         )
@@ -628,8 +654,20 @@ def update_task(
             ),
         ),
     ] = None,
+    deadline_date: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description=(
+                "New official deadline date in YYYY-MM-DD format (e.g. '2026-09-01'). "
+                "This is independent from due_string: due_string controls when the task is "
+                "scheduled to be worked on, while deadline_date sets Todoist's separate "
+                "'Deadline' — a hard due-by date shown distinctly in the UI (optional)."
+            ),
+        ),
+    ] = None,
 ) -> str:
-    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project/section/parent.
+    """Updates an existing Todoist task's title, description, due date, deadline, priority, labels, or moves it to another project/section/parent.
 
     Args:
         task_id: The ID of the Todoist task to update (required).
@@ -641,6 +679,7 @@ def update_task(
         labels: New list of label names for the task.
         section_name_or_id: Target section name or ID to move task into.
         parent_id: New parent task ID (subtask), or "" to promote the task back to the top level.
+        deadline_date: New official deadline date (YYYY-MM-DD), distinct from due_string.
     """
     clean_task_id = str(task_id).strip() if task_id is not None else ""
     if not clean_task_id:
@@ -683,6 +722,14 @@ def update_task(
     if clean_parent_id is not None and len(clean_parent_id) > MAX_TASK_ID_LENGTH:
         return f"❌ Invalid input: Parent task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
 
+    clean_deadline_date = deadline_date.strip() if isinstance(deadline_date, str) else None
+    parsed_deadline_date = None
+    if clean_deadline_date:
+        try:
+            parsed_deadline_date = date.fromisoformat(clean_deadline_date)
+        except ValueError:
+            return f"❌ Invalid input: deadline_date must be in YYYY-MM-DD format (received: '{clean_deadline_date}')."
+
     if (
         clean_content is None
         and clean_description is None
@@ -692,8 +739,9 @@ def update_task(
         and clean_labels is None
         and clean_section is None
         and clean_parent_id is None
+        and clean_deadline_date is None
     ):
-        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels, section_name_or_id, parent_id) girin."
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels, section_name_or_id, parent_id, deadline_date) girin."
 
     try:
         api = _get_api_client()
@@ -716,6 +764,9 @@ def update_task(
         if clean_labels is not None:
             update_kwargs["labels"] = clean_labels
             updated_fields.append(f"Etiketler: {', '.join(['@' + l for l in clean_labels]) if clean_labels else 'Temizlendi'}")
+        if parsed_deadline_date is not None:
+            update_kwargs["deadline_date"] = parsed_deadline_date
+            updated_fields.append(f"Son Teslim Tarihi (Deadline): '{clean_deadline_date}'")
 
         if update_kwargs:
             api.update_task(task_id=clean_task_id, **update_kwargs)
@@ -868,6 +919,56 @@ def list_projects() -> str:
             exc_info=False,
         )
         return "❌ Failed to list projects from Todoist. Check server logs for details."
+
+
+@mcp.tool()
+def get_project(
+    project_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Project ID to retrieve (required).",
+        ),
+    ],
+) -> str:
+    """Retrieves a single Todoist project by its ID, showing all its fields (name, color, parent_id, favorite status, view style).
+
+    Args:
+        project_id: The ID of the Todoist project to retrieve (max 100 chars).
+    """
+    clean_project_id = str(project_id).strip() if project_id is not None else ""
+    if not clean_project_id:
+        return "❌ Invalid input: Project ID cannot be empty or whitespace."
+    if len(clean_project_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Project ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        project = api.get_project(project_id=clean_project_id)
+
+        color_display = project.color if getattr(project, "color", None) else "Yok"
+        parent_display = project.parent_id if getattr(project, "parent_id", None) else "Yok (üst seviye proje)"
+        favorite_display = "Evet" if getattr(project, "is_favorite", False) else "Hayır"
+        view_style_display = getattr(project, "view_style", None) or "Belirlenmedi"
+
+        return (
+            f"📁 Proje Detayları (ID: {project.id})\n"
+            f"• İsim: {project.name}\n"
+            f"• Renk: {color_display}\n"
+            f"• Üst Proje ID (parent_id): {parent_display}\n"
+            f"• Favori mi: {favorite_display}\n"
+            f"• Görünüm Stili: {view_style_display}\n"
+            f"• URL: {project.url}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve project from Todoist (project_id=%s, error_type=%s)",
+            clean_project_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to retrieve project from Todoist (ID: {clean_project_id}). Check server logs for details."
 
 
 @mcp.tool()
