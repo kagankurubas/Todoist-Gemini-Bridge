@@ -6,6 +6,7 @@ Ensures zero token/secret leakage into logs, exceptions, or batch responses.
 from unittest.mock import MagicMock, patch
 import pytest
 import requests
+from models import TaskPayload
 from todoist_client import (
     TodoistAPIError,
     TodoistAuthError,
@@ -126,3 +127,195 @@ def test_get_projects_network_error_sanitization(mock_client, caplog):
 
     assert "SUPER_SECRET_TOKEN_123" not in caplog.text
     assert "SUPER_SECRET_TOKEN_123" not in str(exc_info.value)
+
+
+def test_create_task_includes_parent_id_when_provided(mock_client):
+    """parent_id kwarg olarak verildiğinde request body'sinde gönderilmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_child", "url": "https://todoist.com/task/task_child"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Sub-task", parent_id="task_parent_1")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["parent_id"] == "task_parent_1"
+
+
+def test_create_task_omits_parent_id_when_not_provided(mock_client):
+    """parent_id verilmediğinde request body'sinde hiç yer almamalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_1", "url": "https://todoist.com/task/task_1"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Standalone task")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "parent_id" not in sent_payload
+
+
+def test_create_task_from_payload_includes_parent_id(mock_client):
+    """TaskPayload nesnesi üzerinden geçirilen parent_id de body'ye eklenmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_child", "url": "https://todoist.com/task/task_child"}
+
+    payload = TaskPayload(content="Sub-task via payload", parent_id="task_parent_2")
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(payload)
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["parent_id"] == "task_parent_2"
+
+
+def test_create_task_from_payload_omits_parent_id_when_none(mock_client):
+    """TaskPayload'da parent_id None ise body'de hiç yer almamalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_1", "url": "https://todoist.com/task/task_1"}
+
+    payload = TaskPayload(content="Standalone task via payload")
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(payload)
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "parent_id" not in sent_payload
+
+
+def test_get_task_calls_correct_endpoint_and_parses_response(mock_client):
+    """get_task, GET /tasks/{id} endpoint'ini çağırmalı ve tüm alanları (parent_id, due,
+    labels, description dahil) response'dan olduğu gibi parse edip döndürmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "id": "task_555",
+        "content": "Sub-task example",
+        "description": "Some details",
+        "project_id": "proj_1",
+        "section_id": "sec_1",
+        "parent_id": "task_parent_1",
+        "labels": ["urgent", "work"],
+        "priority": 3,
+        "due": {"date": "2026-09-01", "string": "next tuesday", "is_recurring": False},
+    }
+
+    with patch.object(mock_client.session, "get", return_value=mock_resp) as mock_get:
+        result = mock_client.get_task("task_555")
+
+    called_url = mock_get.call_args.args[0]
+    assert called_url == f"{mock_client.BASE_URL}/tasks/task_555"
+    assert result["id"] == "task_555"
+    assert result["parent_id"] == "task_parent_1"
+    assert result["description"] == "Some details"
+    assert result["labels"] == ["urgent", "work"]
+    assert result["due"]["string"] == "next tuesday"
+
+
+def test_get_task_not_found_raises_todoist_api_error(mock_client):
+    """Var olmayan bir task_id için Todoist 404 döndürdüğünde uygun exception fırlatılmalı."""
+    mock_resp = MagicMock()
+    mock_resp.ok = False
+    mock_resp.status_code = 404
+    mock_resp.reason = "Not Found"
+    mock_resp.text = '{"error": "Task not found"}'
+
+    with patch.object(mock_client.session, "get", return_value=mock_resp):
+        with pytest.raises(TodoistAPIError):
+            mock_client.get_task("nonexistent_task")
+
+
+def test_get_project_calls_correct_endpoint_and_parses_response(mock_client):
+    """get_project, GET /projects/{id} endpoint'ini çağırmalı ve tüm alanları (name, color,
+    parent_id, is_favorite, view_style dahil) response'dan olduğu gibi parse edip döndürmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "id": "proj_555",
+        "name": "İş Projesi",
+        "color": "berry_red",
+        "parent_id": "proj_parent_1",
+        "is_favorite": True,
+        "view_style": "board",
+    }
+
+    with patch.object(mock_client.session, "get", return_value=mock_resp) as mock_get:
+        result = mock_client.get_project("proj_555")
+
+    called_url = mock_get.call_args.args[0]
+    assert called_url == f"{mock_client.BASE_URL}/projects/proj_555"
+    assert result["id"] == "proj_555"
+    assert result["name"] == "İş Projesi"
+    assert result["color"] == "berry_red"
+    assert result["parent_id"] == "proj_parent_1"
+    assert result["is_favorite"] is True
+    assert result["view_style"] == "board"
+
+
+def test_get_project_not_found_raises_todoist_api_error(mock_client):
+    """Var olmayan bir project_id için Todoist 404 döndürdüğünde uygun exception fırlatılmalı."""
+    mock_resp = MagicMock()
+    mock_resp.ok = False
+    mock_resp.status_code = 404
+    mock_resp.reason = "Not Found"
+    mock_resp.text = '{"error": "Project not found"}'
+
+    with patch.object(mock_client.session, "get", return_value=mock_resp):
+        with pytest.raises(TodoistAPIError):
+            mock_client.get_project("nonexistent_project")
+
+
+def test_create_task_includes_deadline_date_when_provided(mock_client):
+    """deadline_date kwarg olarak verildiğinde request body'sinde gönderilmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_deadline", "url": "https://todoist.com/task/task_deadline"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Task with deadline", deadline_date="2026-09-01")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["deadline_date"] == "2026-09-01"
+
+
+def test_create_task_omits_deadline_date_when_not_provided(mock_client):
+    """deadline_date verilmediğinde request body'sinde hiç yer almamalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_1", "url": "https://todoist.com/task/task_1"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Task without deadline")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "deadline_date" not in sent_payload
+
+
+def test_create_task_due_string_and_deadline_date_independent(mock_client):
+    """due_string ve deadline_date birlikte verildiğinde, ikisi de birbirini
+    ezmeden request body'sinde bağımsız alanlar olarak yer almalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_both", "url": "https://todoist.com/task/task_both"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(
+            content="Task with both dates",
+            due_string="tomorrow at 10:00",
+            deadline_date="2026-09-01",
+        )
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["due_string"] == "tomorrow at 10:00"
+    assert sent_payload["deadline_date"] == "2026-09-01"

@@ -12,5 +12,20 @@
     "due_string": "tomorrow",
     "priority": 3,
     "description": "Check open PRs on GitHub"
+  },
+  {
+    "content": "Plan Q3 roadmap",
+    "project_name": "Inbox",
+    "due_string": "next monday",
+    "priority": 3,
+    "description": "Parent task example. Its Todoist-assigned ID becomes the parent_id for related sub-tasks."
+  },
+  {
+    "content": "Collect stakeholder feedback",
+    "project_name": "Inbox",
+    "due_string": "next monday",
+    "priority": 2,
+    "description": "Sub-task example. Replace parent_id below with the real ID of the parent task ('Plan Q3 roadmap') after it is created in Todoist.",
+    "parent_id": "1234567890"
   }
 ]
