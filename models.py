@@ -40,6 +40,10 @@ class TaskPayload(BaseModel):
         default=None,
         description="Optional detailed description or additional notes for the task.",
     )
+    parent_id: Optional[str] = Field(
+        default=None,
+        description="Optional ID of the parent task, making this task a sub-task.",
+    )
 
 
 class BatchTaskPayload(BaseModel):

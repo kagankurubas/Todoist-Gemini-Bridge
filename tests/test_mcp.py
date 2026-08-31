@@ -206,6 +206,51 @@ def test_create_task_inbox_default(mock_get_client):
     )
 
 
+@patch("todoist_mcp._get_api_client")
+def test_create_task_with_parent_id(mock_get_client):
+    """parent_id verildiğinde SDK çağrısına dahil edilmelidir (alt görev/subtask)."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.return_value = MockTask(
+        task_id="task_child_001",
+        content="Alt görev",
+        priority=1,
+    )
+
+    result = create_task(content="Alt görev", parent_id="task_parent_999")
+
+    assert "✅ Görev başarıyla oluşturuldu!" in result
+    mock_api.add_task.assert_called_once_with(
+        content="Alt görev",
+        description=None,
+        project_id=None,
+        due_string=None,
+        priority=1,
+        parent_id="task_parent_999",
+    )
+
+
+@patch("todoist_mcp._get_api_client")
+def test_create_task_without_parent_id_omitted(mock_get_client):
+    """parent_id verilmediğinde SDK çağrısında hiç yer almamalıdır."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+
+    mock_api.get_projects.return_value = [[]]
+    mock_api.add_task.return_value = MockTask(
+        task_id="task_003",
+        content="Bağımsız görev",
+        priority=1,
+    )
+
+    create_task(content="Bağımsız görev")
+
+    call_kwargs = mock_api.add_task.call_args.kwargs
+    assert "parent_id" not in call_kwargs
+
+
 def test_create_task_empty_content():
     result = create_task(content="   ")
     assert "❌ Invalid input: Task content cannot be empty" in result

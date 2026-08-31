@@ -145,6 +145,7 @@ class TodoistClient:
         priority: int = 1,
         description: Optional[str] = None,
         project_name: Optional[str] = None,
+        parent_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
@@ -161,6 +162,7 @@ class TodoistClient:
             priority: Task priority from 1 (normal) to 4 (urgent).
             description: Optional detailed description.
             project_name: Optional project name (automatically resolved if project_id is not set).
+            parent_id: Optional ID of the parent task, making this task a sub-task.
 
         Returns:
             Dict[str, Any]: The created task object.
@@ -186,6 +188,7 @@ class TodoistClient:
             task_due_lang = data.get("due_lang") or due_lang
             task_priority = data.get("priority", priority)
             task_description = data.get("description") or description or ""
+            task_parent_id = data.get("parent_id") or parent_id
         else:
             task_content = str(content or kwargs.get("content", ""))
             task_project_id = project_id or kwargs.get("project_id")
@@ -196,6 +199,7 @@ class TodoistClient:
             task_due_lang = due_lang or kwargs.get("due_lang")
             task_priority = priority if priority is not None else kwargs.get("priority", 1)
             task_description = description or kwargs.get("description", "")
+            task_parent_id = parent_id or kwargs.get("parent_id")
 
         # If project_name is supplied without project_id, attempt to resolve it
         if not task_project_id and task_project_name:
@@ -223,12 +227,16 @@ class TodoistClient:
         if task_description:
             payload["description"] = task_description
 
+        if task_parent_id:
+            payload["parent_id"] = task_parent_id
+
         logger.debug(
-            "Creating Todoist task (content_len=%d, has_description=%s, has_due=%s, has_project_id=%s, priority=%d)",
+            "Creating Todoist task (content_len=%d, has_description=%s, has_due=%s, has_project_id=%s, has_parent_id=%s, priority=%d)",
             len(task_content),
             bool(task_description),
             bool(task_due_string or task_due_date or task_due_datetime),
             bool(task_project_id),
+            bool(task_parent_id),
             task_priority,
         )
 
@@ -293,6 +301,7 @@ class TodoistClient:
             due_lang = task_data.get("due_lang", "tr")
             priority = task_data.get("priority", 1)
             description = task_data.get("description") or ""
+            parent_id = task_data.get("parent_id")
 
             target_project_id = None
             if project_name:
@@ -308,6 +317,7 @@ class TodoistClient:
                     due_lang=due_lang,
                     priority=priority,
                     description=description,
+                    parent_id=parent_id,
                 )
                 task_id = created.get("id", "N/A")
                 task_url = created.get("url") or f"https://app.todoist.com/app/task/{task_id}"

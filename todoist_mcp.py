@@ -251,6 +251,14 @@ def create_task(
             description="Target section name or ID within the project (optional).",
         ),
     ] = None,
+    parent_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="Bu görevi belirtilen Todoist görev ID'sinin alt görevi (subtask) yapar (opsiyonel).",
+        ),
+    ] = None,
 ) -> str:
     """Creates a new task in Todoist with smart project, section, label, and due date resolution.
 
@@ -262,6 +270,7 @@ def create_task(
         priority: Priority integer strictly between 1 (normal) and 4 (urgent).
         labels: Optional list of label strings to attach to the task.
         section_name_or_id: Optional target section name or ID within the project.
+        parent_id: Optional Todoist task ID to create this task as a subtask of (max 100 chars).
     """
     clean_content = content.strip() if isinstance(content, str) else ""
     if not clean_content:
@@ -295,6 +304,10 @@ def create_task(
     if clean_section and len(clean_section) > MAX_SECTION_NAME_LENGTH:
         return f"❌ Invalid input: Section identifier exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
 
+    clean_parent_id = parent_id.strip() if isinstance(parent_id, str) else None
+    if clean_parent_id and len(clean_parent_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Parent task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
     try:
         api = _get_api_client()
         project_id = _find_project_id(api, clean_project_name) if clean_project_name else None
@@ -317,6 +330,8 @@ def create_task(
             task_kwargs["section_id"] = section_id
         if clean_labels:
             task_kwargs["labels"] = clean_labels
+        if clean_parent_id:
+            task_kwargs["parent_id"] = clean_parent_id
 
         task = api.add_task(**task_kwargs)
 

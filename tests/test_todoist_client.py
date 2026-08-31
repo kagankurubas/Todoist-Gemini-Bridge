@@ -6,6 +6,7 @@ Ensures zero token/secret leakage into logs, exceptions, or batch responses.
 from unittest.mock import MagicMock, patch
 import pytest
 import requests
+from models import TaskPayload
 from todoist_client import (
     TodoistAPIError,
     TodoistAuthError,
@@ -126,3 +127,63 @@ def test_get_projects_network_error_sanitization(mock_client, caplog):
 
     assert "SUPER_SECRET_TOKEN_123" not in caplog.text
     assert "SUPER_SECRET_TOKEN_123" not in str(exc_info.value)
+
+
+def test_create_task_includes_parent_id_when_provided(mock_client):
+    """parent_id kwarg olarak verildiğinde request body'sinde gönderilmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_child", "url": "https://todoist.com/task/task_child"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Sub-task", parent_id="task_parent_1")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["parent_id"] == "task_parent_1"
+
+
+def test_create_task_omits_parent_id_when_not_provided(mock_client):
+    """parent_id verilmediğinde request body'sinde hiç yer almamalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_1", "url": "https://todoist.com/task/task_1"}
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(content="Standalone task")
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "parent_id" not in sent_payload
+
+
+def test_create_task_from_payload_includes_parent_id(mock_client):
+    """TaskPayload nesnesi üzerinden geçirilen parent_id de body'ye eklenmelidir."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_child", "url": "https://todoist.com/task/task_child"}
+
+    payload = TaskPayload(content="Sub-task via payload", parent_id="task_parent_2")
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(payload)
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert sent_payload["parent_id"] == "task_parent_2"
+
+
+def test_create_task_from_payload_omits_parent_id_when_none(mock_client):
+    """TaskPayload'da parent_id None ise body'de hiç yer almamalıdır."""
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"id": "task_1", "url": "https://todoist.com/task/task_1"}
+
+    payload = TaskPayload(content="Standalone task via payload")
+
+    with patch.object(mock_client.session, "post", return_value=mock_resp) as mock_post:
+        mock_client.create_task(payload)
+
+    sent_payload = mock_post.call_args.kwargs["json"]
+    assert "parent_id" not in sent_payload
