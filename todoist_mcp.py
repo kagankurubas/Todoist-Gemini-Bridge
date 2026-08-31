@@ -957,6 +957,97 @@ def create_project(
 
 
 @mcp.tool()
+def update_project(
+    project_name_or_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="The Todoist Project ID or Project Name to update (required).",
+        ),
+    ],
+    name: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_PROJECT_NAME_LENGTH,
+            description="New name for the project (optional).",
+        ),
+    ] = None,
+    color: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_COLOR_LENGTH,
+            description="New color name for the project icon (e.g. 'berry_red', 'charcoal', 'teal', optional).",
+        ),
+    ] = None,
+) -> str:
+    """Updates an existing Todoist project's name or color.
+
+    Note: Todoist's API does not support changing a project's parent through this
+    endpoint (there is no move/reparent operation for projects), so this tool only
+    updates name and color.
+
+    Args:
+        project_name_or_id: The ID or name of the project to update (required).
+        name: New name for the project (max 120 chars).
+        color: New color name for the project icon (e.g. 'berry_red', 'sky_blue', 'mint_green').
+    """
+    clean_identifier = str(project_name_or_id).strip() if project_name_or_id is not None else ""
+    if not clean_identifier:
+        return "❌ Invalid input: Project identifier cannot be empty or whitespace."
+    if len(clean_identifier) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: Project identifier exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    clean_name = name.strip() if isinstance(name, str) else None
+    if clean_name is not None and not clean_name:
+        return "❌ Invalid input: New project name cannot be empty or whitespace."
+    if clean_name is not None and len(clean_name) > MAX_PROJECT_NAME_LENGTH:
+        return f"❌ Invalid input: New project name exceeds maximum length of {MAX_PROJECT_NAME_LENGTH} characters."
+
+    clean_color = color.strip().lower() if isinstance(color, str) else None
+    if clean_color and len(clean_color) > MAX_COLOR_LENGTH:
+        return f"❌ Invalid input: Color name exceeds maximum length of {MAX_COLOR_LENGTH} characters."
+
+    if clean_name is None and clean_color is None:
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen name veya color parametresi girin."
+
+    try:
+        api = _get_api_client()
+        project_id, old_name = _resolve_project(api, clean_identifier)
+
+        if not project_id:
+            return f"⚠️ Güncellenecek proje bulunamadı: '{clean_identifier}'."
+
+        kwargs = {}
+        updated_fields = []
+        if clean_name is not None:
+            kwargs["name"] = clean_name
+            updated_fields.append(f"İsim: '{clean_name}'")
+        if clean_color is not None:
+            kwargs["color"] = clean_color
+            updated_fields.append(f"Renk: '{clean_color}'")
+
+        api.update_project(project_id=project_id, **kwargs)
+
+        changes_summary = "\n".join([f"• {field}" for field in updated_fields])
+        return (
+            f"✅ Proje başarıyla güncellendi (ID: {project_id})!\n"
+            f"Yapılan değişiklikler:\n"
+            f"{changes_summary}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to update project in Todoist (identifier=%s, error_type=%s)",
+            clean_identifier,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to update project '{clean_identifier}' in Todoist. Check server logs for details."
+
+
+@mcp.tool()
 def delete_project(
     project_name_or_id: Annotated[
         str,

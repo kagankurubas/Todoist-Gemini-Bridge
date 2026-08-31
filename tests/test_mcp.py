@@ -38,6 +38,7 @@ from todoist_mcp import (
     list_tasks,
     reopen_task,
     update_label,
+    update_project,
     update_task,
 )
 
@@ -779,6 +780,93 @@ def test_create_project_sanitizes_exception(mock_get_client):
 
     result = create_project(name="ErrProj")
     assert result == "❌ Failed to create project 'ErrProj' in Todoist. Check server logs for details."
+    assert "SECRET" not in result
+
+
+# =====================================================================
+# UPDATE_PROJECT TESTS
+# =====================================================================
+
+@patch("todoist_mcp._get_api_client")
+def test_update_project_name_only(mock_get_client):
+    """Sadece name verildiğinde body'de yalnızca name gönderilmeli."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_1", "Eski İsim")
+    mock_api.get_projects.return_value = [[mock_project]]
+
+    result = update_project(project_name_or_id="proj_1", name="Yeni İsim")
+
+    assert "✅ Proje başarıyla güncellendi (ID: proj_1)!" in result
+    assert "İsim: 'Yeni İsim'" in result
+    assert "Renk:" not in result
+    mock_api.update_project.assert_called_once_with(project_id="proj_1", name="Yeni İsim")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_project_color_only(mock_get_client):
+    """Sadece color verildiğinde body'de yalnızca color gönderilmeli."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_2", "Proje İsmi")
+    mock_api.get_projects.return_value = [[mock_project]]
+
+    result = update_project(project_name_or_id="Proje İsmi", color="teal")
+
+    assert "✅ Proje başarıyla güncellendi (ID: proj_2)!" in result
+    assert "Renk: 'teal'" in result
+    assert "İsim:" not in result
+    mock_api.update_project.assert_called_once_with(project_id="proj_2", color="teal")
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_project_name_and_color(mock_get_client):
+    """İkisi birden verildiğinde body'de her ikisi de gönderilmeli."""
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_3", "Eski İsim")
+    mock_api.get_projects.return_value = [[mock_project]]
+
+    result = update_project(project_name_or_id="proj_3", name="Güncel İsim", color="mint_green")
+
+    assert "✅ Proje başarıyla güncellendi (ID: proj_3)!" in result
+    assert "İsim: 'Güncel İsim'" in result
+    assert "Renk: 'mint_green'" in result
+    mock_api.update_project.assert_called_once_with(project_id="proj_3", name="Güncel İsim", color="mint_green")
+
+
+def test_update_project_no_fields_provided():
+    """Hiçbir alan verilmeden çağrıldığında API'ye hiç gitmeden uyarı dönmeli (no-op)."""
+    result = update_project(project_name_or_id="proj_4")
+    assert "⚠️ Güncellenecek hiçbir alan belirtilmedi" in result
+
+
+def test_update_project_empty_identifier():
+    result = update_project(project_name_or_id="   ", name="Yeni İsim")
+    assert "❌ Invalid input: Project identifier cannot be empty" in result
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_project_not_found(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_api.get_projects.return_value = [[]]
+
+    result = update_project(project_name_or_id="Olmayan Proje", name="Yeni İsim")
+    assert "⚠️ Güncellenecek proje bulunamadı: 'Olmayan Proje'." in result
+    mock_api.update_project.assert_not_called()
+
+
+@patch("todoist_mcp._get_api_client")
+def test_update_project_sanitizes_exception(mock_get_client):
+    mock_api = MagicMock()
+    mock_get_client.return_value = mock_api
+    mock_project = MockProject("proj_5", "Proje")
+    mock_api.get_projects.return_value = [[mock_project]]
+    mock_api.update_project.side_effect = Exception("TODOIST_API_TOKEN=SECRET")
+
+    result = update_project(project_name_or_id="proj_5", name="Yeni İsim")
+    assert result == "❌ Failed to update project 'proj_5' in Todoist. Check server logs for details."
     assert "SECRET" not in result
 
 
