@@ -113,6 +113,31 @@ class TodoistClient:
             )
             raise TodoistAPIError(f"Network error while connecting to Todoist API: {type(e).__name__}") from e
 
+    def get_task(self, task_id: str) -> Dict[str, Any]:
+        """
+        Retrieves a single task by its ID, including all its fields
+        (e.g. parent_id, due, labels, description, priority, project_id).
+
+        Args:
+            task_id: The Todoist task ID to retrieve.
+
+        Returns:
+            Dict[str, Any]: The task object from Todoist.
+        """
+        url = f"{self.BASE_URL}/tasks/{task_id}"
+        logger.debug("Fetching Todoist task %s", task_id)
+
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+            return self._handle_response(response)
+        except requests.RequestException as e:
+            logger.error(
+                "Network error while fetching task (error_type=%s)",
+                type(e).__name__,
+                exc_info=False,
+            )
+            raise TodoistAPIError(f"Network error while connecting to Todoist API: {type(e).__name__}") from e
+
     def resolve_project_name(self, project_name: str) -> Optional[str]:
         """
         Resolves a project name to its Todoist project ID (case-insensitive).

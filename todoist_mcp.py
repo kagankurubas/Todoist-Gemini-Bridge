@@ -419,6 +419,60 @@ def list_tasks(
 
 
 @mcp.tool()
+def get_task(
+    task_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=MAX_TASK_ID_LENGTH,
+            description="The Todoist Task ID to retrieve (required).",
+        ),
+    ],
+) -> str:
+    """Retrieves a single Todoist task by its ID, showing all its fields (parent_id, due date, labels, description, priority, project/section IDs, etc.).
+
+    Args:
+        task_id: The ID of the Todoist task to retrieve (max 100 chars).
+    """
+    clean_task_id = str(task_id).strip() if task_id is not None else ""
+    if not clean_task_id:
+        return "❌ Invalid input: Task ID cannot be empty or whitespace."
+    if len(clean_task_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
+    try:
+        api = _get_api_client()
+        task = api.get_task(task_id=clean_task_id)
+
+        due_info = task.due.string if task.due and task.due.string else "Belirlenmedi"
+        labels_display = ", ".join(["@" + l for l in task.labels]) if getattr(task, "labels", None) else "Yok"
+        description_display = task.description if task.description else "Yok"
+        parent_display = task.parent_id if task.parent_id else "Yok (üst seviye görev)"
+        section_display = task.section_id if task.section_id else "Yok"
+
+        return (
+            f"📄 Görev Detayları (ID: {task.id})\n"
+            f"• Başlık: {task.content}\n"
+            f"• Açıklama: {description_display}\n"
+            f"• Proje ID: {task.project_id}\n"
+            f"• Bölüm ID: {section_display}\n"
+            f"• Üst Görev ID (parent_id): {parent_display}\n"
+            f"• Öncelik: p{task.priority}\n"
+            f"• Tarih / Tekrar: {due_info}\n"
+            f"• Etiketler: {labels_display}\n"
+            f"• URL: {task.url}"
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to retrieve task from Todoist (task_id=%s, error_type=%s)",
+            clean_task_id,
+            type(e).__name__,
+            exc_info=False,
+        )
+        return f"❌ Failed to retrieve task from Todoist (ID: {clean_task_id}). Check server logs for details."
+
+
+@mcp.tool()
 def complete_task(
     task_id: Annotated[
         str,
@@ -562,8 +616,20 @@ def update_task(
             description="Target section name or ID to move the task into (optional).",
         ),
     ] = None,
+    parent_id: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            max_length=MAX_TASK_ID_LENGTH,
+            description=(
+                "New parent Todoist task ID to make this task a subtask of. "
+                "Pass an empty string (\"\") to remove the current parent and move the task "
+                "back to the top level (optional). Omit entirely to leave the parent unchanged."
+            ),
+        ),
+    ] = None,
 ) -> str:
-    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project/section.
+    """Updates an existing Todoist task's title, description, due date, priority, labels, or moves it to another project/section/parent.
 
     Args:
         task_id: The ID of the Todoist task to update (required).
@@ -574,6 +640,7 @@ def update_task(
         priority: Priority integer between 1 (Normal) and 4 (Urgent).
         labels: New list of label names for the task.
         section_name_or_id: Target section name or ID to move task into.
+        parent_id: New parent task ID (subtask), or "" to promote the task back to the top level.
     """
     clean_task_id = str(task_id).strip() if task_id is not None else ""
     if not clean_task_id:
@@ -611,6 +678,11 @@ def update_task(
     if clean_section is not None and len(clean_section) > MAX_SECTION_NAME_LENGTH:
         return f"❌ Invalid input: Section identifier exceeds maximum length of {MAX_SECTION_NAME_LENGTH} characters."
 
+    # None = untouched; "" (after strip) = explicit "remove parent" request; non-empty = new parent ID.
+    clean_parent_id = parent_id.strip() if isinstance(parent_id, str) else None
+    if clean_parent_id is not None and len(clean_parent_id) > MAX_TASK_ID_LENGTH:
+        return f"❌ Invalid input: Parent task ID exceeds maximum length of {MAX_TASK_ID_LENGTH} characters."
+
     if (
         clean_content is None
         and clean_description is None
@@ -619,8 +691,9 @@ def update_task(
         and priority is None
         and clean_labels is None
         and clean_section is None
+        and clean_parent_id is None
     ):
-        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels, section_name_or_id) girin."
+        return "⚠️ Güncellenecek hiçbir alan belirtilmedi. Lütfen en az bir parametre (content, description, project_name, due_string, priority, labels, section_name_or_id, parent_id) girin."
 
     try:
         api = _get_api_client()
@@ -660,14 +733,31 @@ def update_task(
             if not target_section_id:
                 return f"⚠️ Görev güncellendi fakat hedef bölüm bulunamadı: '{clean_section}'."
 
-        if target_project_id is not None or target_section_id is not None:
+        # Todoist's update endpoint does not accept parent_id; changing it requires the
+        # dedicated move endpoint. That endpoint also has no "clear parent" value (it drops
+        # any None field before sending, and there is no documented empty/null parent_id
+        # behavior) — the verified way to promote a subtask back to the top level is to move
+        # it to an explicit project_id instead, so we resolve the task's current project first.
+        target_parent_id = clean_parent_id if clean_parent_id else None
+        unparent_requested = clean_parent_id == ""
+        if unparent_requested and target_project_id is None and target_section_id is None:
+            current_task = api.get_task(task_id=clean_task_id)
+            target_project_id = current_task.project_id
+
+        if target_project_id is not None or target_section_id is not None or target_parent_id is not None:
             move_kwargs = {}
             if target_project_id is not None:
                 move_kwargs["project_id"] = target_project_id
-                updated_fields.append(f"Hedef Proje: '{clean_project_name}' (ID: {target_project_id})")
+                if clean_project_name is not None:
+                    updated_fields.append(f"Hedef Proje: '{clean_project_name}' (ID: {target_project_id})")
             if target_section_id is not None:
                 move_kwargs["section_id"] = target_section_id
                 updated_fields.append(f"Hedef Bölüm: '{sec_name}' (ID: {target_section_id})")
+            if target_parent_id is not None:
+                move_kwargs["parent_id"] = target_parent_id
+                updated_fields.append(f"Üst Görev (parent_id): '{target_parent_id}'")
+            elif unparent_requested:
+                updated_fields.append("Üst Görev: Kaldırıldı (görev üst seviyeye taşındı)")
 
             api.move_task(task_id=clean_task_id, **move_kwargs)
 
